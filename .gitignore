@@ -1,0 +1,20 @@
+RemoteSystemsTempFiles/
+Vivado/.Xil/
+Vivado/logs/
+*.log
+*.jou
+Vitis/*_workspace/
+Vitis/.*/
+Vitis/.*
+Vitis/boot/
+docs/build/
+bootimages/
+PetaLinux/offline.txt
+# UPDATER START
+Vivado/vck190_fmcp1/
+PetaLinux/vck190_fmcp1/
+Vitis/vck190_fmcp1_workspace/
+Vivado/vck190_fmcp1_25g/
+PetaLinux/vck190_fmcp1_25g/
+Vitis/vck190_fmcp1_25g_workspace/
+# UPDATER END

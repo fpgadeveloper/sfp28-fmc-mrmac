@@ -1,0 +1,56 @@
+{
+  "bd_name": "mrmac",
+  "prj_name": "sfp28-fmc-mrmac",
+  "groups": [
+    {
+      "label": "versal",
+      "name": "Versal"
+    }
+  ],
+  "designs": [
+    {
+      "publish": true,
+      "label": "vck190_fmcp1",
+      "board": "VCK190",
+      "link": "https://www.xilinx.com/vck190",
+      "url": "xilinx.com",
+      "boardname": "vck190",
+      "lanes": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "linkspeed": "10",
+      "connector": "FMCP1",
+      "group": "versal",
+      "petalinux": true,
+      "baremetal": true,
+      "license": true,
+      "flashsize": "0",
+      "flashintf": "0"
+    },
+    {
+      "publish": true,
+      "label": "vck190_fmcp1_25g",
+      "board": "VCK190",
+      "link": "https://www.xilinx.com/vck190",
+      "url": "xilinx.com",
+      "boardname": "vck190",
+      "lanes": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "linkspeed": "25",
+      "connector": "FMCP1",
+      "group": "versal",
+      "petalinux": true,
+      "baremetal": true,
+      "license": true,
+      "flashsize": "0",
+      "flashintf": "0"
+    }
+  ]
+}

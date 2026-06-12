@@ -1,0 +1,8 @@
+{
+    "bd_name": "mrmac",
+    "app_name": "echo_server",
+    "app_template": "None",
+    "bsp_libs": [],
+    "src": {"all": "common/src"},
+    "combine_bit_elf": false
+}

@@ -1,0 +1,186 @@
+From: Opsero <support@opsero.com>
+Date: Thu, 4 Jun 2026 00:00:00 +0000
+Subject: [PATCH] net: axienet: poll MRMAC block-lock and drive netdev carrier
+
+The MRMAC has no PHY/phylink and gives no link-change interrupt, so the
+stock driver only checks RX block lock once in axienet_open() with a 1 ms
+timeout and fails the open (-ENODEV) if the link is not already up. On a
+cold bring-up the GT/PCS need tens to hundreds of ms to lock, so the open
+loses the race and the interface needs a manual "ip link" bounce; if the
+link partner powers on after us, it never comes up at all.
+
+Add a delayed work that drives the netdev carrier from RX block-lock +
+status. The Versal GTY RX does not re-acquire block lock on a partner
+signal that stabilises after our last reset, so a passive poll never comes
+up; while down the work re-issues axienet_mrmac_reset() each cycle to
+re-attempt lock (GT reset is one-shot, so the MRMAC core/serdes reset is
+the part that matters) and once up it just watches for loss. open() now
+brings the interface up with carrier off and starts the monitor instead of
+failing, so the link comes up automatically whenever both ends are lasing,
+including when the far end (re)appears. The work is cancelled in
+axienet_stop() and the open error path.
+---
+diff --git a/drivers/net/ethernet/xilinx/xilinx_axienet.h b/drivers/net/ethernet/xilinx/xilinx_axienet.h
+--- a/drivers/net/ethernet/xilinx/xilinx_axienet.h
++++ b/drivers/net/ethernet/xilinx/xilinx_axienet.h
+@@ -1070,6 +1070,7 @@
+ 	seqcount_mutex_t hw_stats_seqcount;
+ 	struct mutex stats_lock;
+ 	struct delayed_work stats_work;
++	struct delayed_work mrmac_link_work;
+ 	bool reset_in_progress;
+ 
+ 	bool stopping;
+diff --git a/drivers/net/ethernet/xilinx/xilinx_axienet_main.c b/drivers/net/ethernet/xilinx/xilinx_axienet_main.c
+--- a/drivers/net/ethernet/xilinx/xilinx_axienet_main.c
++++ b/drivers/net/ethernet/xilinx/xilinx_axienet_main.c
+@@ -628,6 +628,64 @@
+ 	axienet_iow(lp, MRMAC_RESET_OFFSET, val);
+ }
+ 
++/* MRMAC exposes no PHY/phylink and gives no link-change interrupt, so the
++ * stock driver only checks RX block lock once in axienet_open() and fails the
++ * open if it isn't up yet. That loses the race on a cold bring-up and never
++ * retries. Instead, poll RX block-lock + status and reflect it in the netdev
++ * carrier. Crucially the Versal GTY RX does NOT re-acquire block lock on a
++ * partner signal that stabilises after our last reset (the stock driver only
++ * locked when a manual "ip link" bounce re-ran the reset while the link was
++ * present); a passive poll therefore never comes up. So while down we re-issue
++ * axienet_mrmac_reset() each cycle to re-attempt lock (GT reset is one-shot, so
++ * the MRMAC core/serdes reset is the part that matters), and once up we just
++ * watch for loss. This brings the link up automatically on cold bring-up and
++ * whenever the far end (re)appears. Scheduled from axienet_open() and cancelled
++ * in axienet_stop()/the open error path.
++ */
++static void axienet_mrmac_link_poll(struct work_struct *work)
++{
++	struct axienet_local *lp = container_of(work, struct axienet_local,
++						mrmac_link_work.work);
++	struct net_device *ndev = lp->ndev;
++	bool link_up;
++
++	link_up = (axienet_get_mrmac_blocklock(lp) & MRMAC_RX_BLKLCK_MASK) &&
++		  (axienet_get_mrmac_rx_status(lp) & MRMAC_RX_STATUS_MASK);
++
++	/* 10G/25G MRMAC can mis-report RX status as good; confirm with a recent
++	 * RX valid control code, matching the original axienet_open() check.
++	 */
++	if (link_up && (lp->max_speed == SPEED_10000 ||
++			lp->max_speed == SPEED_25000)) {
++		axienet_iow(lp, MRMAC_STATRX_VALID_CTRL_OFFSET, MRMAC_STS_ALL_MASK);
++		if (!(axienet_ior(lp, MRMAC_STATRX_VALID_CTRL_OFFSET) &
++		      MRMAC_RX_VALID_MASK))
++			link_up = false;
++	}
++
++	if (link_up) {
++		if (!netif_carrier_ok(ndev)) {
++			netif_carrier_on(ndev);
++			netdev_info(ndev, "MRMAC link up at %d\n", lp->max_speed);
++		}
++		/* Steady state: just watch for loss. */
++		schedule_delayed_work(&lp->mrmac_link_work, HZ);
++		return;
++	}
++
++	if (netif_carrier_ok(ndev)) {
++		netif_carrier_off(ndev);
++		netdev_info(ndev, "MRMAC link down\n");
++	}
++
++	/* Down: re-run the MRMAC core/serdes reset to re-attempt block lock,
++	 * then re-check after it has had time to settle (open() proves ~100ms
++	 * after this reset is enough when the partner signal is present).
++	 */
++	axienet_mrmac_reset(lp);
++	schedule_delayed_work(&lp->mrmac_link_work, msecs_to_jiffies(250));
++}
++
+ static ulong dcmac_gt_tx_reset_status(struct axienet_local *lp)
+ {
+ 	ulong val;
+@@ -3054,45 +3112,23 @@
+ 	}
+ 
+ 	if (lp->axienet_config->mactype == XAXIENET_MRMAC) {
+-		u32 val;
+-
+-		/* Reset MRMAC */
++		/* Reset MRMAC and let the GT/PCS settle. */
+ 		axienet_mrmac_reset(lp);
+-
+ 		mdelay(DELAY_1MS * 100);
+-		/* Check for block lock bit to be set. This ensures that
+-		 * MRMAC ethernet IP is functioning normally.
+-		 */
+-		axienet_iow(lp, MRMAC_TX_STS_OFFSET, MRMAC_STS_ALL_MASK);
+-		axienet_iow(lp, MRMAC_RX_STS_OFFSET, MRMAC_STS_ALL_MASK);
+-		ret = readx_poll_timeout(axienet_get_mrmac_blocklock, lp, val,
+-					 (val & MRMAC_RX_BLKLCK_MASK), 10, DELAY_OF_ONE_MILLISEC);
+-		if (ret)
+-			netdev_err(ndev, "MRMAC block lock not complete! Cross-check the MAC ref clock configuration\n");
+-
+-		ret = readx_poll_timeout(axienet_get_mrmac_rx_status, lp, val,
+-					 (val & MRMAC_RX_STATUS_MASK), 10, DELAY_OF_ONE_MILLISEC);
+-		if (ret) {
+-			netdev_err(ndev, "MRMAC Link is down!\n");
+-			ret = -ENODEV;
+-			goto err_phy;
+-		}
+-
+-		/* Distinguish a mis-reported status=good for 10G/25G MRMAC */
+-		if (lp->max_speed == SPEED_10000 ||
+-		    lp->max_speed == SPEED_25000) {
+-			axienet_iow(lp, MRMAC_STATRX_VALID_CTRL_OFFSET, MRMAC_STS_ALL_MASK);
+-			val = axienet_ior(lp, MRMAC_STATRX_VALID_CTRL_OFFSET);
+-
+-			if (!(val & MRMAC_RX_VALID_MASK)) {
+-				netdev_err(ndev, "MRMAC Link is down! No recent RX Valid Control Code\n");
+-				ret = -ENODEV;
+-				goto err_phy;
+-			}
+-		}
+ 
+-		netdev_info(ndev, "MRMAC setup at %d\n", lp->max_speed);
++		/* MRMAC has no PHY/phylink and no link-change interrupt. Rather
++		 * than fail open() with a one-shot block-lock check (which loses
++		 * the race on a cold bring-up and never retries), bring the
++		 * interface up with carrier off and let axienet_mrmac_link_poll()
++		 * raise/lower carrier from the RX block-lock + status, re-issuing
++		 * the MRMAC reset while down. The link then comes up whenever both
++		 * ends are lasing, including when the far end powers on after us.
++		 */
+ 		axienet_iow(lp, MRMAC_TICK_OFFSET, MRMAC_TICK_TRIGGER);
++		netif_carrier_off(ndev);
++		schedule_delayed_work(&lp->mrmac_link_work, 0);
++		netdev_info(ndev, "MRMAC setup at %d (link monitored)\n",
++			    lp->max_speed);
+ 	}
+ 
+ 	/* If Runtime speed switching supported */
+@@ -3135,6 +3171,8 @@
+ 		free_irq(lp->eth_irq, ndev);
+ err_phy:
+ 	cancel_delayed_work_sync(&lp->stats_work);
++	if (lp->axienet_config->mactype == XAXIENET_MRMAC)
++		cancel_delayed_work_sync(&lp->mrmac_link_work);
+ 	if (lp->phylink) {
+ 		phylink_stop(lp->phylink);
+ 		phylink_disconnect_phy(lp->phylink);
+@@ -3161,6 +3199,8 @@
+ 		WRITE_ONCE(lp->stopping, true);
+ 
+ 	cancel_delayed_work_sync(&lp->stats_work);
++	if (lp->axienet_config->mactype == XAXIENET_MRMAC)
++		cancel_delayed_work_sync(&lp->mrmac_link_work);
+ 
+ 	if (lp->phylink) {
+ 		phylink_stop(lp->phylink);
+@@ -5118,6 +5158,7 @@
+ 	mutex_init(&lp->stats_lock);
+ 	seqcount_mutex_init(&lp->hw_stats_seqcount, &lp->stats_lock);
+ 	INIT_DEFERRABLE_WORK(&lp->stats_work, axienet_refresh_stats);
++	INIT_DELAYED_WORK(&lp->mrmac_link_work, axienet_mrmac_link_poll);
+ 	INIT_LIST_HEAD(&lp->rx_fs_list.list);
+ 
+ 	lp->axi_clk = devm_clk_get_optional(&pdev->dev, "s_axi_lite_clk");
