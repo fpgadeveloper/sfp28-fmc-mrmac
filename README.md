@@ -9,6 +9,8 @@ configured for four independent 10GbE or 25GbE channels (one GTY lane per port),
 data moved to/from DDR by per-port AXI MCDMAs and driven under PetaLinux by the AXI Ethernet
 driver. A bare-metal echo-server test application is also included.
 
+![Quad SFP28 FMC with the VCK190](docs/source/images/vck190-with-op081_03.jpg)
+
 Important links:
 
 * The user guide for these reference designs is hosted here: [10G/25G Ethernet (MRMAC) for Quad SFP28 FMC docs](https://sfp28-mrmac.ethernetfmc.com "10G/25G Ethernet (MRMAC) for Quad SFP28 FMC docs")
