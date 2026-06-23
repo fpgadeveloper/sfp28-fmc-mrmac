@@ -1,7 +1,7 @@
 # PetaLinux
 
-PetaLinux can be built for this reference design by using the Makefile in the `PetaLinux` directory
-of the repository.
+PetaLinux can be built for this reference design with the cross-platform `build.py`
+runner at the root of the repository.
 
 ## Requirements
 
@@ -15,27 +15,22 @@ users are advised to use a Linux virtual machine to build the PetaLinux project.
 
 ## How to build
 
-1. From a command terminal, clone the Git repository and `cd` into it.
+The build runner locates and sources the PetaLinux and Vivado settings itself, so there
+is no need to source them by hand. See the [build instructions](build_instructions) for
+the full description of the runner.
+
+1. From a command terminal, clone the Git repository (with its submodules) and `cd` into it:
    ```
-   git clone https://github.com/fpgadeveloper/sfp28-fmc-mrmac.git
+   git clone --recurse-submodules https://github.com/fpgadeveloper/sfp28-fmc-mrmac.git
    cd sfp28-fmc-mrmac
    ```
-2. Launch PetaLinux by sourcing the `settings.sh` bash script, eg:
+2. Build the PetaLinux image for your target by running the following command and replacing
+   `<target>` with one of the target design labels found in the build instructions:
    ```
-   source <path-to-petalinux-install>/2025.2/settings.sh
+   ./build.sh petalinux --target <target>
    ```
-3. Launch Vivado by sourcing the `settings64.sh` bash script, eg:
-   ```
-   source <path-to-xilinx-tools>/2025.2/Vivado/settings64.sh
-   ```
-4. Build the Vivado and PetaLinux project for your specific target platform by running the following
-   commands and replacing `<target>` with one of the target design labels listed in build instructions.
-   ```
-   cd PetaLinux
-   make petalinux TARGET=<target>
-   ```
-   
-The last command will launch the build process for the corresponding Vivado project if that project
+
+This will also launch the build process for the corresponding Vivado project if that project
 has not already been built and its hardware exported.
 
 ## Boot from SD card

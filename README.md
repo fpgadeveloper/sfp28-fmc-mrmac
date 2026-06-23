@@ -43,15 +43,15 @@ supported by the design and the FMC connector on which to connect the Quad SFP28
 <!-- updater start -->
 ### 10G designs
 
-| Target board          | Target design      | Link speeds <br> supported | SFP28 ports | FMC Slot    | Vivado<br> Edition |
-|-----------------------|--------------------|------------|-------------|-------------|-------|
-| [VCK190]              | `vck190_fmcp1`     | 10G        | 4x          | FMCP1       | Enterprise |
+| Target board          | Target design      | Link speeds <br> supported | SFP28 ports | FMC Slot    | Vivado<br> Edition | IP<br>License |
+|-----------------------|--------------------|------------|-------------|-------------|-------|-------|
+| [VCK190]              | `vck190_fmcp1`     | 10G        | 4x          | FMCP1       | Enterprise | Required |
 
 ### 25G designs
 
-| Target board          | Target design      | Link speeds <br> supported | SFP28 ports | FMC Slot    | Vivado<br> Edition |
-|-----------------------|--------------------|------------|-------------|-------------|-------|
-| [VCK190]              | `vck190_fmcp1_25g` | 25G        | 4x          | FMCP1       | Enterprise |
+| Target board          | Target design      | Link speeds <br> supported | SFP28 ports | FMC Slot    | Vivado<br> Edition | IP<br>License |
+|-----------------------|--------------------|------------|-------------|-------------|-------|-------|
+| [VCK190]              | `vck190_fmcp1_25g` | 25G        | 4x          | FMCP1       | Enterprise | Required |
 
 [VCK190]: https://www.xilinx.com/vck190
 <!-- updater end -->
@@ -77,57 +77,66 @@ in each environment:
 
 ## Build instructions
 
-Clone the repo:
+Clone the repo and change into its directory:
 ```
 git clone https://github.com/fpgadeveloper/sfp28-fmc-mrmac.git
-```
-
-Source Vivado and PetaLinux tools:
-
-```
-source <path-to-petalinux>/2025.2/settings.sh
-source <path-to-xilinx-tools>/2025.2/Vivado/settings64.sh
-```
-
-Build all (Vivado project, PetaLinux and the bare-metal echo server), and gather the boot
-images into `bootimages/`:
-
-```
 cd sfp28-fmc-mrmac
-make bootimage TARGET=vck190_fmcp1
 ```
 
-To build a single stage, use the Makefile in the corresponding subdirectory, for example:
+### Cross-platform build runner
+
+All builds are driven by `build.py` at the repo root, on both Windows
+(git bash) and Linux. The `build.sh` / `build.bat` shim finds a suitable
+Python 3 automatically (including the one bundled with the AMD tools).
+Pick a target design label from the tables above (or run `./build.sh
+list`), then run the build command for the stage(s) you want — each
+command builds whatever it depends on automatically and skips anything
+already built. On Windows without git bash, run the same commands from
+Command Prompt or PowerShell using `build.bat` (e.g. `build.bat xsa
+--target <target>`).
+
+You don't need to source the AMD tools first — the build runner finds
+Vivado, Vitis and PetaLinux automatically in their standard install
+locations and sets up the environment each stage needs. If your tools
+are installed somewhere non-standard and the runner can't find them,
+source the tool settings yourself before running the build.
+
+#### Build the Vivado project (bitstream + XSA)
 
 ```
-cd sfp28-fmc-mrmac/PetaLinux
-make petalinux TARGET=vck190_fmcp1
+./build.sh xsa --target <target>
 ```
 
-## Troubleshooting
+#### Build the standalone application
 
-### PetaLinux build fails with `bitbake petalinux-image-minimal failed` and sstate fetch errors
-
-If a `make petalinux TARGET=<target>` run ends with errors like
+Builds the Vitis workspace and the baremetal boot file (`BOOT.BIN`):
 
 ```
-ERROR: <package>-<ver>-r0 do_..._setscene: Fetcher failure: Unable to find file file://.../sstate:...
-[ERROR] Command bitbake petalinux-image-minimal failed
+./build.sh standalone --target <target>
 ```
 
-the actual build is not broken. These `_setscene` errors come from
-bitbake trying to pull prebuilt artifacts from the public Xilinx
-sstate-cache mirror, which occasionally returns 404 for individual
-packages. Bitbake falls back to building those packages locally and
-succeeds, but still exits non-zero because of the failed fetches —
-so the Makefile stops before the `petalinux-package` step that
-produces `BOOT.BIN`.
+#### Build PetaLinux (Linux only)
 
-**Fix: just re-run the same command.** The second attempt finds the
-missing packages in the local sstate cache (populated by the first
-run) and completes cleanly, producing `BOOT.BIN`. The reference
-design itself is fine; this is a transient issue with the public
-mirror.
+```
+./build.sh petalinux --target <target>
+```
+
+#### Build everything
+
+Builds all of the above that the target supports, then gathers the boot
+images into `bootimages/*.zip`:
+
+```
+./build.sh all --target <target>
+./build.sh all --target all          # every target in the repo
+```
+
+Also available: `status`, `clean`, `project` — see
+`./build.sh --help`. On Windows, the PetaLinux and Yocto stages require a
+Linux machine; the runner says so and prints the hand-off command. The
+legacy `make` interface still works on Linux (each Makefile now wraps
+`build.sh`) but is deprecated and will be removed at the next version
+update.
 
 ## Contribute
 

@@ -19,6 +19,8 @@ a bitstream. The license can be obtained from the AMD Xilinx Licensing site. The
 also requires the Vivado *Enterprise* Edition (a 30-day evaluation license is available from the
 AMD Xilinx Licensing site).
 
+Additionally, some designs use IP cores that are licensed separately from the Vivado edition itself (for example: MRMAC, TEMAC, XXV Ethernet). The **IP License** column in the tables below indicates the designs that require such a license to generate a bitstream; evaluation licenses are generally available from AMD for testing.
+
 ## Target designs
 
 This repo contains designs that target the supported development board(s) and their FMC
@@ -30,9 +32,9 @@ supported by the design and the FMC connector on which to connect the mezzanine 
 
 These designs drive each SFP28 port as an independent {{ linkspeed }}GbE channel of the MRMAC.
 
-| Target board        | Target design     | Ports   | FMC Slot    | Vivado<br> Edition |
-|---------------------|-------------------|---------|-------------|-----|
-{% for design in data.designs %}{% if design.linkspeed == linkspeed and design.publish %}| [{{ design.board }}]({{ design.link }}) | `{{ design.label }}` | {{ design.lanes | length }}x | {{ design.connector }} | {{ "Enterprise" if design.license else "Standard 🆓" }} |
+| Target board        | Target design     | Ports   | FMC Slot    | Vivado<br> Edition | IP<br>License |
+|---------------------|-------------------|---------|-------------|-----|-----|
+{% for design in data.designs %}{% if design.linkspeed == linkspeed and design.publish %}| [{{ design.board }}]({{ design.link }}) | `{{ design.label }}` | {{ design.lanes | length }}x | {{ design.connector }} | {{ "Enterprise" if design.license else "Standard 🆓" }} | {{ "Required" if design.ip_license else "-" }} |
 {% endif %}{% endfor %}
 {% endfor %}
 
@@ -48,156 +50,136 @@ Notes:
    build the same architecture; they differ only in the MRMAC configuration preset, the active
    client data width and the SFP28 rate-select pin levels.
 
-## Windows users
+## Cross-platform build runner
 
-Windows users will be able to build the Vivado project and the Vitis workspace (the bare-metal
-echo server), however Linux is required to build the PetaLinux project.
+All builds are driven by the `build.py` runner at the root of the repository,
+on **both Windows and Linux** — the build instructions are the same for the
+two operating systems. Each command builds whatever it depends on
+automatically, skips anything that is already built, and locates the AMD
+tools itself, so there is no need to source the settings scripts beforehand.
 
-```{tip}
-If you wish to build the PetaLinux project,
-we recommend that you build the entire project (including the Vivado project) on a machine (either 
-physical or virtual) running one of the [supported Linux distributions].
+On Linux and on Windows (git bash), commands are run with the `build.sh`
+shim, which finds a suitable Python 3 automatically (including the
+interpreter bundled with the AMD tools). Windows users who prefer not to
+use git bash can run the same commands from Command Prompt or PowerShell
+using `build.bat` instead — the commands and arguments are otherwise
+identical, for example `build.bat xsa --target <target>`.
+
+To see the available targets and the state of a build:
+
+```
+./build.sh list                       # list the targets and their attributes
+./build.sh status --target <target>   # show the per-stage artifact state
+./build.sh clean --target <target>    # delete a target's generated outputs
 ```
 
-### Build Vivado project in Windows
-
-1. Download the repo as a zip file and extract the files to a directory
-   on your hard drive --OR-- clone the repo to your hard drive
-2. Open Windows Explorer, browse to the repo files on your hard drive.
-3. In the `Vivado` directory, double click on the `build-vivado.bat` batch file.
-   You will be prompted to select a target design to build. You will find the project in
-   the folder `Vivado/<target>`.
-4. Run Vivado and open the project that was just created.
-5. Click Generate bitstream.
-6. When the bitstream is successfully generated, select **File->Export->Export Hardware**.
-   In the window that opens, tick **Include bitstream** and use the default name and location
-   for the XSA file.
-
-### Build Vitis workspace in Windows
-
-Before running these steps, you must first build and export the Vivado project as described above.
-
-1. Return to Windows Explorer and browse to the Vitis directory in the repo.
-2. Double click the `build-vitis.bat` batch file. You will be prompted to select a target design.
-   A Vitis workspace with hardware platform and software application will be created for the
-   selected target design. You will find the Vitis workspace in the folder `Vitis/<target>_workspace`.
-
-## Linux users
-
-This project can be built using a machine (either physical or virtual) with one of the 
-[supported Linux distributions].
-
-```{tip}
-The build steps can be completed in the order shown below, or
-you can go directly to the [build PetaLinux](#build-petalinux-project-in-linux) instructions below
-to build the Vivado and PetaLinux projects with a single command.
+```{note}
+The embedded Linux images (PetaLinux) can only be built on a
+native Linux machine; everything else builds on Windows too. On Windows, the
+runner refuses the Linux-only stages up front and prints the exact command
+to run on the Linux machine. For Versal targets on Windows, the runner also
+verifies that the project path fits within the 260-character Windows path
+limit before building, and explains the `subst` workaround if it does not.
 ```
 
-### Build Vivado project in Linux
+```{attention}
+The legacy `make` interface described in previous versions of
+this documentation still works on Linux — each Makefile is now a thin
+wrapper around `build.sh` — but it is deprecated and will be removed at the
+next version update.
+```
 
-1. Open a command terminal and launch the setup script for Vivado:
-   ```
-   source <path-to-xilinx-tools>/2025.2/Vivado/settings64.sh
-   ```
-2. Clone the Git repository and `cd` into the `Vivado` folder of the repo:
-   ```
-   git clone https://github.com/fpgadeveloper/sfp28-fmc-mrmac.git
-   cd sfp28-fmc-mrmac/Vivado
-   ```
-3. Run make to create the Vivado project for the target board. You must replace `<target>` with a valid
-   target (alternatively, skip to step 5):
-   ```
-   make project TARGET=<target>
-   ```
-   Valid target labels are:
-   {% for design in data.designs if design.publish %} `{{ design.label }}`{{ ", " if not loop.last else "." }} {% endfor %}
-   That will create the Vivado project and block design without generating a bitstream or exporting to XSA.
-4. Open the generated project in the Vivado GUI and click **Generate Bitstream**. Once the build is
-   complete, select **File->Export->Export Hardware** and be sure to tick **Include bitstream** and use
-   the default name and location for the XSA file.
-5. Alternatively, you can create the Vivado project, generate the bitstream and export to XSA (steps 3 and 4),
-   all from a single command:
-   ```
-   make xsa TARGET=<target>
-   ```
+### Build Vivado project
 
-### Build Vitis workspace in Linux
+This single command creates the Vivado project, generates the bitstream and
+exports the hardware to an XSA file:
 
-The following steps are required if you wish to build and run the bare-metal
-[echo server](echo_server). You can skip to the following section if you instead want to use
-PetaLinux. You are not required to have built the Vivado design before following these steps,
-as the Makefile triggers the Vivado build for the corresponding design if it has not already
-been done.
+```
+./build.sh xsa --target <target>
+```
 
-1. Launch the setup script for Vivado (only if you skipped the Vivado build steps above):
-   ```
-   source <path-to-xilinx-tools>/2025.2/Vivado/settings64.sh
-   ```
-2. Launch the setup script for Vitis:
-   ```
-   source <path-to-xilinx-tools>/2025.2/Vitis/settings64.sh
-   ```
-3. To build the Vitis workspace, `cd` to the Vitis directory in the repo,
-   then run make to create the Vitis workspace and compile the standalone application:
-   ```
-   cd sfp28-fmc-mrmac/Vitis
-   make workspace TARGET=<target>
-   ```
-   Valid target labels for the workspaces are:
-   {% for design in data.designs if design.publish %}{% if design.baremetal %} `{{ design.label }}`{{ ", " if not loop.last else "." }} {% endif %}{% endfor %}
-   You will find the Vitis workspace in the folder `Vitis/<target>_workspace`.
+Valid targets are:
+{% for design in data.designs if design.publish %} `{{ design.label }}`{{ ", " if not loop.last else "." }} {% endfor %}
 
-### Build PetaLinux project in Linux
+If you want the Vivado project and block design without generating a
+bitstream — for example, to explore or modify the design in the Vivado GUI —
+run `./build.sh project --target <target>` instead, then open the project
+from `Vivado/<target>/`.
 
-These steps will build the PetaLinux project for the target design. You are not required to have built the
-Vivado design before following these steps, as the Makefile triggers the Vivado build for the corresponding
-design if it has not already been done.
+### Build Vitis workspace
 
-1. Launch the setup script for Vivado (only if you skipped the Vivado build steps above):
-   ```
-   source <path-to-xilinx-tools>/2025.2/Vivado/settings64.sh
-   ```
-2. Launch PetaLinux by sourcing the `settings.sh` bash script, eg:
-   ```
-   source <path-to-petalinux-install>/2025.2/settings.sh
-   ```
-3. Build the PetaLinux project for your specific target platform by running the following
-   command, replacing `<target>` with a valid value from below:
-   ```
-   cd PetaLinux
-   make petalinux TARGET=<target>
-   ```
-   Valid target labels for PetaLinux projects are:
-   {% for design in data.designs if design.petalinux and design.publish %} `{{ design.label }}`{{ ", " if not loop.last else "." }} {% endfor %}
-   Note that if you skipped the Vivado build steps above, the Makefile will first generate and
-   build the Vivado project, and then build the PetaLinux project.
+This creates the Vitis workspace and compiles the bare-metal
+[echo server](echo_server), producing the boot file (`BOOT.BIN`). The Vivado
+XSA is built first if it does not already exist:
 
-### PetaLinux offline build
+```
+./build.sh standalone --target <target>
+```
 
-If you need to build the PetaLinux project offline (without an internet connection), you can
-follow these instructions.
+Valid targets for the standalone application are:
+{% for design in data.designs if design.baremetal and design.publish %} `{{ design.label }}`{{ ", " if not loop.last else "." }} {% endfor %}
 
-1. Download the sstate-cache artefacts from the Xilinx downloads site (the same page where you downloaded
-   PetaLinux tools). For this Versal design you need:
+The workspace is created in `Vitis/<target>_workspace` and the boot files
+are gathered in `Vitis/boot/<target>/`.
+
+### Build PetaLinux
+
+The PetaLinux build requires a native Linux machine (one of the [supported
+Linux distributions]) with PetaLinux Tools 2025.2 installed. The runner
+locates and sources the PetaLinux `settings.sh` itself, and builds the
+Vivado XSA first if it does not already exist:
+
+```
+./build.sh petalinux --target <target>
+```
+
+Valid targets for PetaLinux are:
+{% for design in data.designs if design.petalinux and design.publish %} `{{ design.label }}`{{ ", " if not loop.last else "." }} {% endfor %}
+
+The output products are written to `PetaLinux/<target>/images/linux/`.
+
+#### PetaLinux offline build
+
+If you need to build the PetaLinux project offline (without an internet
+connection), you can follow these instructions.
+
+1. Download the sstate-cache artefacts from the Xilinx downloads site (the
+   same page where you downloaded PetaLinux tools). For this Versal design
+   you need:
    * aarch64 sstate-cache
    * Downloads (for all designs)
-2. Extract the contents of those files to a single location on your hard drive, for this example
-   we'll say `/home/user/petalinux-sstate`. That should leave you with the following directory 
-   structure:
+2. Extract the contents of those files to a single location on your hard
+   drive, for this example we'll say `/home/user/petalinux-sstate`. That
+   should leave you with the following directory structure:
    ```
    /home/user/petalinux-sstate
                              +---  aarch64
                              +---  downloads
    ```
-3. Create a text file called `offline.txt` in the `PetaLinux` directory of the project repository. The file should contain
-   a single line of text specifying the path where you extracted the sstate-cache files. In this example, the contents of 
-   the file would be:
+3. Create a text file called `offline.txt` in the `PetaLinux` directory of
+   the project repository. The file should contain a single line of text
+   specifying the path where you extracted the sstate-cache files. In this
+   example, the contents of the file would be:
    ```
    /home/user/petalinux-sstate
    ```
-   It is important that the file contain only one line and that the path is written with NO TRAILING 
-   FORWARD SLASH.
+   It is important that the file contain only one line and that the path is
+   written with NO TRAILING FORWARD SLASH.
 
-Now when you use `make` to build the PetaLinux project, it will be configured for offline build.
+The PetaLinux build will then be configured for offline build.
+
+### Build everything
+
+This builds everything that the target supports — the Vivado project and XSA,
+the standalone application and the PetaLinux image — and gathers the boot
+images into `bootimages/*.zip`:
+
+```
+./build.sh all --target <target>
+./build.sh all --target all      # every target in the repo
+```
+
+On Windows, `all` builds everything that the host can build and reports the
+Linux-only stages as `BLOCKED` rather than failing.
 
 [supported Linux distributions]: https://docs.amd.com/r/en-US/ug1144-petalinux-tools-reference-guide/Setting-Up-Your-Environment

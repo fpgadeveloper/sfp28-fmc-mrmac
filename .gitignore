@@ -13,8 +13,18 @@ PetaLinux/offline.txt
 # UPDATER START
 Vivado/vck190_fmcp1/
 PetaLinux/vck190_fmcp1/
-Vitis/vck190_fmcp1_workspace/
 Vivado/vck190_fmcp1_25g/
 PetaLinux/vck190_fmcp1_25g/
-Vitis/vck190_fmcp1_25g_workspace/
 # UPDATER END
+dfx_runtime.txt
+.repo.yaml
+.memdata_temp_mem_file.mem
+Vivado/*.bif
+Vivado/*.pdi
+Vivado/*.rcdo
+Vivado/*.rnpi
+Vivado/wdi_info.xml
+__pycache__/
+*.pyc
+Vivado/gen_files/
+Vivado/static_files/

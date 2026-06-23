@@ -29,21 +29,20 @@ monitor (see [advanced](advanced)).
 
 ## Building the Vitis workspace
 
-To build the Vitis workspace and the echo server application, follow the instructions
-appropriate for your operating system:
+To build the Vitis workspace and the echo server application, follow the
+[build instructions](/build_instructions.md#build-vitis-workspace) — the
+steps are the same on Windows and Linux.
 
-* **Windows**: Follow the [build instructions for Windows users](/build_instructions.md#windows-users)
-* **Linux**: Follow the [build instructions for Linux users](/build_instructions.md#linux-users)
-
-In short, from the `Vitis` directory:
+In short, from the repository root:
 
 ```
-make workspace TARGET=<target>
+./build.sh standalone --target <target>
 ```
 
-builds the workspace and the application; `make bootfile TARGET=<target>` additionally packages
-a `BOOT.BIN` into `Vitis/boot/<target>/`. The echo server is also built and packaged as the
-"standalone" boot image when you run `make bootimage TARGET=<target>` at the repo root.
+builds the Vivado XSA (if it does not already exist), the Vitis workspace and
+the echo server application, and packages a `BOOT.BIN` into
+`Vitis/boot/<target>/`. The echo server is also gathered into the
+"standalone" boot image zip when you run `./build.sh all --target <target>`.
 
 ## Run the application
 
