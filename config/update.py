@@ -108,7 +108,7 @@ def get_vivado_build_targets(data):
             template = templates[design['group']]
             lanes = '{'
             for lane in design['lanes']:
-                lanes += ' ' + lane
+                lanes += ' ' + str(lane)
             lanes += ' }'
             target = 'dict set target_dict {} {{ {} {} {} {} "{}" }}'.format(design['label'],design['url'],design['boardname'],
                 template,lanes,design['linkspeed'])
@@ -131,12 +131,7 @@ def get_petalinux_targets(data):
             # differ only in the per-port max-speed (the axienet/MRMAC driver
             # configures the MAC rate from it); the dtsi references the
             # MRMAC / sfp labels that the SDT generator produces.
-            if design['group'] == 'versal':
-                lanecfg = 'ports-versal-' + ''.join(design['lanes'])
-            else:
-                lanecfg = 'ports-' + ''.join(design['lanes'])
-            if design['linkspeed'] == '25':
-                lanecfg += '-25g'
+            lanecfg = design.get('portcfg', '')
             template = templates[design['group']]
             target = '{}_target := {} {} {} {}'.format(design['label'],template,design['flashsize'],design['flashintf'],lanecfg)
             targets.append(target)

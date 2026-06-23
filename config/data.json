@@ -16,16 +16,17 @@
       "url": "xilinx.com",
       "boardname": "vck190",
       "lanes": [
-        "0",
-        "1",
-        "2",
-        "3"
+        0,
+        1,
+        2,
+        3
       ],
       "linkspeed": "10",
       "connector": "FMCP1",
       "group": "versal",
       "petalinux": true,
       "yocto": true,
+      "portcfg": "ports-versal-0123",
       "baremetal": true,
       "license": true,
       "ip_license": true,
@@ -40,16 +41,17 @@
       "url": "xilinx.com",
       "boardname": "vck190",
       "lanes": [
-        "0",
-        "1",
-        "2",
-        "3"
+        0,
+        1,
+        2,
+        3
       ],
       "linkspeed": "25",
       "connector": "FMCP1",
       "group": "versal",
       "petalinux": true,
       "yocto": true,
+      "portcfg": "ports-versal-0123-25g",
       "baremetal": true,
       "license": true,
       "ip_license": true,
