@@ -43,15 +43,15 @@ supported by the design and the FMC connector on which to connect the Quad SFP28
 <!-- updater start -->
 ### 10G designs
 
-| Target board          | Target design      | Link speeds <br> supported | SFP28 ports | FMC Slot    | Vivado<br> Edition | IP<br>License |
-|-----------------------|--------------------|------------|-------------|-------------|-------|-------|
-| [VCK190]              | `vck190_fmcp1`     | 10G        | 4x          | FMCP1       | Enterprise | Required |
+| Target board          | Target design      | Link speeds <br> supported | SFP28 ports | FMC Slot    | Yocto | Vivado<br> Edition | IP<br>License |
+|-----------------------|--------------------|------------|-------------|-------------|-------|-------|-------|
+| [VCK190]              | `vck190_fmcp1`     | 10G        | 4x          | FMCP1       | :white_check_mark: | Enterprise | Required |
 
 ### 25G designs
 
-| Target board          | Target design      | Link speeds <br> supported | SFP28 ports | FMC Slot    | Vivado<br> Edition | IP<br>License |
-|-----------------------|--------------------|------------|-------------|-------------|-------|-------|
-| [VCK190]              | `vck190_fmcp1_25g` | 25G        | 4x          | FMCP1       | Enterprise | Required |
+| Target board          | Target design      | Link speeds <br> supported | SFP28 ports | FMC Slot    | Yocto | Vivado<br> Edition | IP<br>License |
+|-----------------------|--------------------|------------|-------------|-------------|-------|-------|-------|
+| [VCK190]              | `vck190_fmcp1_25g` | 25G        | 4x          | FMCP1       | :white_check_mark: | Enterprise | Required |
 
 [VCK190]: https://www.xilinx.com/vck190
 <!-- updater end -->

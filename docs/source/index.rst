@@ -19,6 +19,7 @@ four SFP28 ports as an independent 10GbE or 25GbE channel.
    build_instructions
    echo_server
    petalinux
+   yocto
    advanced
    troubleshooting
    revision_history
