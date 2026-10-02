@@ -1,0 +1,103 @@
+#!/bin/sh
+# ---------------------------------------------------------------------------
+# mrmac-loopback-test : MRMAC port loopback self-test
+#
+# Opsero Quad SFP28 FMC (MRMAC) reference design (vck190_fmcp1).
+#
+# Run as root with a passive SFP28 loopback fitted in the port under test.
+# It blasts frames out the interface with the kernel pktgen engine; because the
+# destination MAC is the interface's own address, the frames loop back and are
+# received again. A healthy MRMAC datapath returns ~1 received frame per
+# transmitted frame at the same size (not fragmented), with zero MAC errors.
+#
+# Usage:  mrmac-loopback-test [iface] [count] [pkt_size]
+#   iface     network interface (default: eth0)
+#   count     frames to send      (default: 1000000)
+#   pkt_size  frame size in bytes (default: 1500)
+# ---------------------------------------------------------------------------
+
+IFACE="${1:-eth0}"
+COUNT="${2:-1000000}"
+PKTSIZE="${3:-1500}"
+PG=/proc/net/pktgen
+
+if [ "$(id -u)" != "0" ]; then
+	echo "ERROR: must be run as root (try: sudo -i)"; exit 1
+fi
+if [ ! -e "/sys/class/net/$IFACE" ]; then
+	echo "ERROR: interface '$IFACE' not found"; exit 1
+fi
+
+MAC="$(cat /sys/class/net/$IFACE/address)"
+
+echo "=================================================================="
+echo " MRMAC loopback test : iface=$IFACE  count=$COUNT  pkt_size=$PKTSIZE"
+echo " interface MAC (used as loopback dst_mac) : $MAC"
+echo "=================================================================="
+
+# Bring the interface up and load pktgen.
+ip link set "$IFACE" up 2>/dev/null
+if ! modprobe pktgen 2>/dev/null; then
+	echo "ERROR: could not load the pktgen kernel module"; exit 1
+fi
+[ -e "$PG/pgctrl" ] || { echo "ERROR: $PG not present after modprobe pktgen"; exit 1; }
+
+read_stat() { cat "/sys/class/net/$IFACE/statistics/$1" 2>/dev/null || echo 0; }
+
+RX0=$(read_stat rx_packets); TX0=$(read_stat tx_packets)
+RXB0=$(read_stat rx_bytes);  TXB0=$(read_stat tx_bytes)
+RXE0=$(read_stat rx_errors); RXD0=$(read_stat rx_dropped)
+
+# Configure pktgen on a single kernel thread (cpu 0).
+echo "rem_device_all"        > "$PG/kpktgend_0"
+echo "add_device $IFACE"     > "$PG/kpktgend_0"
+echo "count $COUNT"          > "$PG/$IFACE"
+echo "pkt_size $PKTSIZE"     > "$PG/$IFACE"
+echo "dst_mac $MAC"          > "$PG/$IFACE"
+
+echo "Running pktgen (this sends $COUNT frames and may take a moment)..."
+echo "start"                 > "$PG/pgctrl"
+
+RX1=$(read_stat rx_packets); TX1=$(read_stat tx_packets)
+RXB1=$(read_stat rx_bytes);  TXB1=$(read_stat tx_bytes)
+RXE1=$(read_stat rx_errors); RXD1=$(read_stat rx_dropped)
+
+RXP=$((RX1 - RX0)); TXP=$((TX1 - TX0))
+RXBY=$((RXB1 - RXB0)); TXBY=$((TXB1 - TXB0))
+RXER=$((RXE1 - RXE0)); RXDR=$((RXD1 - RXD0))
+
+echo
+echo "------------------------------ pktgen result ------------------------------"
+grep -E "Result:|pkts-sofar|errors" "$PG/$IFACE" 2>/dev/null
+echo "---------------------------------------------------------------------------"
+echo " TX frames : $TXP    (bytes $TXBY)"
+echo " RX frames : $RXP    (bytes $RXBY)"
+if [ "$RXP" -gt 0 ]; then
+	echo " RX avg frame size : $((RXBY / RXP)) bytes  (expect ~$PKTSIZE; ~48 = beat-fragmentation bug)"
+fi
+echo " RX errors : $RXER    RX dropped : $RXDR"
+echo "---------------------------------------------------------------------------"
+
+# Verdict: a correct datapath returns close to as many frames as it sent
+# (allow 5% slack for stray multicast / a few dropped at start), full-size,
+# with no RX errors. Beat-fragmentation shows up as RX frames >> TX frames and
+# a tiny average frame size.
+VERDICT="PASS"
+if [ "$RXP" -lt $((TXP - TXP / 20)) ] || [ "$RXP" -gt $((TXP + TXP / 20)) ]; then
+	VERDICT="FAIL (RX frame count not ~= TX; datapath framing or backpressure)"
+fi
+if [ "$RXER" -ne 0 ]; then
+	VERDICT="FAIL (RX errors detected)"
+fi
+echo " VERDICT: $VERDICT"
+echo "==========================================================================="
+
+# Detailed MAC-level counters, if ethtool is available.
+if command -v ethtool >/dev/null 2>&1; then
+	echo
+	echo "ethtool -S $IFACE (non-zero counters):"
+	ethtool -S "$IFACE" 2>/dev/null | awk -F: 'NF==2 { v=$2; gsub(/ /,"",v); if (v!="0") print "  "$0 }'
+fi
+
+# Leave pktgen cleanly stopped.
+echo "rem_device_all" > "$PG/kpktgend_0" 2>/dev/null

@@ -1,0 +1,241 @@
+// SPDX-License-Identifier: MIT
+// Copyright (C) 2025-2026, Opsero Electronic Design Inc.  All rights reserved.
+
+/*
+ * Quad SFP28 FMC (MRMAC) port config: ports-versal-0123-25g (ported from PetaLinux bsp/ports-versal-0123-25g).
+ * Per-port wiring layered on the SDT-generated Linux device tree.
+ */
+
+/* Port configuration overlay for the Quad SFP28 FMC (MRMAC), all four SFP28
+ * ports on the VCK190 (FMCP1).
+ *
+ * All four ports are clients of the SINGLE MRMAC hard block (BD cell "mrmac",
+ * MRMAC_X0Y0). The SDT generator emits one DT node per MAC port from that one
+ * instance, in port order:
+ *   mrmac   : port 0    mrmac_1 : port 1
+ *   mrmac_2 : port 2    mrmac_3 : port 3
+ * Per-port peripherals live in the sfp_port<N> BD hierarchies:
+ *   sfp_port<N>_axi_mcdma   : the port's AXI MCDMA datapath
+ *   sfp_port<N>_axi_gpio_gt : the port's GT control GPIO (gpiochip):
+ *       outputs 0..4 = gt_reset_all, gt_reset_tx_datapath, gt_reset_rx_datapath,
+ *                      gt-ctrl-rate[0:1] (spare)
+ *       inputs  5..6 = gt_tx_reset_done, gt_rx_reset_done
+ * Shared peripherals:
+ *   axi_iic_0       : I2C to the FMC PCA9548 mux (ch0-3 = SFP module I2C,
+ *                     ch4 = Si5328 clock generator)
+ *   axi_gpio_modabs : 4-bit input GPIO, MOD_ABS of slots 0-3 (active-low
+ *                     presence)
+ *
+ * The Si5328 jitter-attenuating clock generator sources the GT reference
+ * clock (GBTCLK0): the clk-si5324 driver programs it to 322.265625 MHz
+ * (LCPLL integer-N), the GT refclk of the MRMAC example designs and the AMD
+ * VCK190 Ethernet TRD, at both the 10G and 25G line rates.
+ *
+ * The interrupt numbers follow the BD's pl_ps_irq assignment (GIC SPI 84 +
+ * irq index): port N MCDMA mm2s/s2mm = SPI 84+2N / 85+2N, axi_iic_0 = SPI 92.
+ *
+ * MAC addresses: the SDT assigns sequential per-port MACs
+ * (00:0a:35:00:00:00..03); local-mac-address is set here anyway so the
+ * assignment is explicit and stable.
+ *
+ * The MRMAC ports bind to the xilinx_axienet driver (CONFIG_XILINX_AXI_EMAC +
+ * CONFIG_AXIENET_HAS_MCDMA). The driver:
+ *   - takes its datapath from axistream-connected (the port's MCDMA, whose
+ *     compatible is overridden to "xlnx,eth-dma" so the standalone xilinx_dma
+ *     dmaengine driver doesn't claim the region first and break the probe)
+ *   - resets the port's GT lane through the gt-*-gpios below
+ *   - reads the line rate from max-speed / xlnx,mrmac-rate
+ *   - drives netdev carrier from RX block-lock via the carrier-monitor patch
+ *     (0002-net-axienet-mrmac-carrier-link-monitor.patch)
+ *
+ * The SFP cage nodes (sff,sfp) give module presence detection, EEPROM and
+ * diagnostics (hwmon) through the kernel SFP framework. The axienet/MRMAC
+ * driver has no phylink so the cages are NOT linked to the MACs - they are
+ * standalone management devices.
+ */
+
+/ {
+	ref_si5328: ref_si5328 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <114285000>;
+	};
+};
+
+&axi_iic_0 {
+	i2c-mux@70 {
+		compatible = "nxp,pca9548";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <0x70>;
+		sfp_eth0_i2c: i2c@0 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0>;
+			/* SFP28 slot 0 */
+		};
+		sfp_eth1_i2c: i2c@1 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <1>;
+			/* SFP28 slot 1 */
+		};
+		sfp_eth2_i2c: i2c@2 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <2>;
+			/* SFP28 slot 2 */
+		};
+		sfp_eth3_i2c: i2c@3 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <3>;
+			/* SFP28 slot 3 */
+		};
+		i2c@4 {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <4>;
+			fmc_si5328: clock-generator@68 {
+				status = "okay";
+				compatible = "silabs,si5328";
+				reg = <0x68>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				#clock-cells = <1>;
+				clocks = <&ref_si5328>;
+				clock-names = "xtal";
+
+				fmc_si5328_clk: clk0@0 {
+					reg = <0>;
+					clock-frequency = <322265625>; /* MRMAC GT refclk (LCPLL integer-N) */
+				};
+			};
+		};
+	};
+};
+
+/* SFP cage descriptors. mod-def0-gpios references the 4-bit input
+ * channel of axi_gpio_modabs - line indices 0..3 are mod_abs[0..3].
+ * Active-low: line LOW = module present, line HIGH = module absent. */
+/ {
+	sfp_eth0: sfp-eth0 {
+		compatible = "sff,sfp";
+		i2c-bus = <&sfp_eth0_i2c>;
+		mod-def0-gpios = <&axi_gpio_modabs 0 1>;
+		maximum-power-milliwatt = <2000>;
+	};
+
+	sfp_eth1: sfp-eth1 {
+		compatible = "sff,sfp";
+		i2c-bus = <&sfp_eth1_i2c>;
+		mod-def0-gpios = <&axi_gpio_modabs 1 1>;
+		maximum-power-milliwatt = <2000>;
+	};
+
+	sfp_eth2: sfp-eth2 {
+		compatible = "sff,sfp";
+		i2c-bus = <&sfp_eth2_i2c>;
+		mod-def0-gpios = <&axi_gpio_modabs 2 1>;
+		maximum-power-milliwatt = <2000>;
+	};
+
+	sfp_eth3: sfp-eth3 {
+		compatible = "sff,sfp";
+		i2c-bus = <&sfp_eth3_i2c>;
+		mod-def0-gpios = <&axi_gpio_modabs 3 1>;
+		maximum-power-milliwatt = <2000>;
+	};
+};
+
+/* ----- SFP28 port 0 (FMC DP0, MRMAC port 0) ----- */
+&mrmac {
+	axistream-connected = <&sfp_port0_axi_mcdma>;
+	interrupt-names = "mm2s_ch1_introut", "s2mm_ch1_introut";
+	interrupt-parent = <&gic>;
+	interrupts = <0 84 4>, <0 85 4>; /* port 0 MCDMA mm2s/s2mm (pl_ps_irq0/1) */
+	local-mac-address = [00 0a 35 00 00 00];
+	xlnx,channel-ids = "1";
+	xlnx,num-queues = /bits/ 16 <0x1>;
+	xlnx,addrwidth = <0x20>;
+	max-speed = <25000>;
+	gt-ctrl-gpios        = <&sfp_port0_axi_gpio_gt 0 0>;
+	gt-tx-dpath-gpios    = <&sfp_port0_axi_gpio_gt 1 0>;
+	gt-rx-dpath-gpios    = <&sfp_port0_axi_gpio_gt 2 0>;
+	gt-ctrl-rate-gpios   = <&sfp_port0_axi_gpio_gt 3 0>, <&sfp_port0_axi_gpio_gt 4 0>;
+	gt-tx-rst-done-gpios = <&sfp_port0_axi_gpio_gt 5 0>;
+	gt-rx-rst-done-gpios = <&sfp_port0_axi_gpio_gt 6 0>;
+	xlnx,gtlane = <0>;
+};
+&sfp_port0_axi_mcdma {
+	compatible = "xlnx,eth-dma";
+};
+
+/* ----- SFP28 port 1 (FMC DP1, MRMAC port 1) ----- */
+&mrmac_1 {
+	axistream-connected = <&sfp_port1_axi_mcdma>;
+	interrupt-names = "mm2s_ch1_introut", "s2mm_ch1_introut";
+	interrupt-parent = <&gic>;
+	interrupts = <0 86 4>, <0 87 4>; /* port 1 MCDMA mm2s/s2mm (pl_ps_irq2/3) */
+	local-mac-address = [00 0a 35 00 00 01];
+	xlnx,channel-ids = "1";
+	xlnx,num-queues = /bits/ 16 <0x1>;
+	xlnx,addrwidth = <0x20>;
+	max-speed = <25000>;
+	gt-ctrl-gpios        = <&sfp_port1_axi_gpio_gt 0 0>;
+	gt-tx-dpath-gpios    = <&sfp_port1_axi_gpio_gt 1 0>;
+	gt-rx-dpath-gpios    = <&sfp_port1_axi_gpio_gt 2 0>;
+	gt-ctrl-rate-gpios   = <&sfp_port1_axi_gpio_gt 3 0>, <&sfp_port1_axi_gpio_gt 4 0>;
+	gt-tx-rst-done-gpios = <&sfp_port1_axi_gpio_gt 5 0>;
+	gt-rx-rst-done-gpios = <&sfp_port1_axi_gpio_gt 6 0>;
+	xlnx,gtlane = <1>;
+};
+&sfp_port1_axi_mcdma {
+	compatible = "xlnx,eth-dma";
+};
+
+/* ----- SFP28 port 2 (FMC DP2, MRMAC port 2) ----- */
+&mrmac_2 {
+	axistream-connected = <&sfp_port2_axi_mcdma>;
+	interrupt-names = "mm2s_ch1_introut", "s2mm_ch1_introut";
+	interrupt-parent = <&gic>;
+	interrupts = <0 88 4>, <0 89 4>; /* port 2 MCDMA mm2s/s2mm (pl_ps_irq4/5) */
+	local-mac-address = [00 0a 35 00 00 02];
+	xlnx,channel-ids = "1";
+	xlnx,num-queues = /bits/ 16 <0x1>;
+	xlnx,addrwidth = <0x20>;
+	max-speed = <25000>;
+	gt-ctrl-gpios        = <&sfp_port2_axi_gpio_gt 0 0>;
+	gt-tx-dpath-gpios    = <&sfp_port2_axi_gpio_gt 1 0>;
+	gt-rx-dpath-gpios    = <&sfp_port2_axi_gpio_gt 2 0>;
+	gt-ctrl-rate-gpios   = <&sfp_port2_axi_gpio_gt 3 0>, <&sfp_port2_axi_gpio_gt 4 0>;
+	gt-tx-rst-done-gpios = <&sfp_port2_axi_gpio_gt 5 0>;
+	gt-rx-rst-done-gpios = <&sfp_port2_axi_gpio_gt 6 0>;
+	xlnx,gtlane = <2>;
+};
+&sfp_port2_axi_mcdma {
+	compatible = "xlnx,eth-dma";
+};
+
+/* ----- SFP28 port 3 (FMC DP3, MRMAC port 3) ----- */
+&mrmac_3 {
+	axistream-connected = <&sfp_port3_axi_mcdma>;
+	interrupt-names = "mm2s_ch1_introut", "s2mm_ch1_introut";
+	interrupt-parent = <&gic>;
+	interrupts = <0 90 4>, <0 91 4>; /* port 3 MCDMA mm2s/s2mm (pl_ps_irq6/7) */
+	local-mac-address = [00 0a 35 00 00 03];
+	xlnx,channel-ids = "1";
+	xlnx,num-queues = /bits/ 16 <0x1>;
+	xlnx,addrwidth = <0x20>;
+	max-speed = <25000>;
+	gt-ctrl-gpios        = <&sfp_port3_axi_gpio_gt 0 0>;
+	gt-tx-dpath-gpios    = <&sfp_port3_axi_gpio_gt 1 0>;
+	gt-rx-dpath-gpios    = <&sfp_port3_axi_gpio_gt 2 0>;
+	gt-ctrl-rate-gpios   = <&sfp_port3_axi_gpio_gt 3 0>, <&sfp_port3_axi_gpio_gt 4 0>;
+	gt-tx-rst-done-gpios = <&sfp_port3_axi_gpio_gt 5 0>;
+	gt-rx-rst-done-gpios = <&sfp_port3_axi_gpio_gt 6 0>;
+	xlnx,gtlane = <3>;
+};
+&sfp_port3_axi_mcdma {
+	compatible = "xlnx,eth-dma";
+};

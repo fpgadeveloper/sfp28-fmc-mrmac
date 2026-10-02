@@ -580,16 +580,24 @@ proc create_sfp_port {label line_rate} {
   #########################################################
   # GT control GPIO (lets the Linux axienet driver reset this port's GT lane
   # and read reset-done). Dual-channel AXI GPIO -> ONE Linux gpiochip:
-  #   Channel 1 (5 outputs): bit0=gt_reset_all, bit1=gt_reset_tx_datapath,
-  #                          bit2=gt_reset_rx_datapath, bits3-4=gt-ctrl-rate (spare)
-  #   Channel 2 (2 inputs):  bit0=gt_tx_reset_done, bit1=gt_rx_reset_done
+  #   Channel 1 (5 outputs):  bit0=gt_reset_all, bit1=gt_reset_tx_datapath,
+  #                           bit2=gt_reset_rx_datapath, bits3-4=gt-ctrl-rate (spare)
+  #   Channel 2 (32 inputs):  bit0=gt_tx_reset_done, bit1=gt_rx_reset_done,
+  #                           bits[7:2]  = RX frames dropped because the MAC
+  #                                        flagged them bad (6-bit, wraps)
+  #                           bits[31:8] = RX frames dropped because the RX
+  #                                        frame FIFO was full (24-bit, wraps)
+  #   (drop counters from the RX adapter's frame FIFO; read GPIO2_DATA at
+  #   offset 0x8 of this GPIO. The Linux gpio line numbers of the two
+  #   reset-done bits are unchanged: channel 2 lines start after the 5
+  #   channel-1 lines.)
   #########################################################
   create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio axi_gpio_gt
   set_property -dict [list \
     CONFIG.C_GPIO_WIDTH {5} \
     CONFIG.C_ALL_OUTPUTS {1} \
     CONFIG.C_IS_DUAL {1} \
-    CONFIG.C_GPIO2_WIDTH {2} \
+    CONFIG.C_GPIO2_WIDTH {32} \
     CONFIG.C_ALL_INPUTS_2 {1} \
   ] [get_bd_cells axi_gpio_gt]
   connect_bd_net [get_bd_pins sys_clk] [get_bd_pins axi_gpio_gt/s_axi_aclk]
@@ -608,9 +616,10 @@ proc create_sfp_port {label line_rate} {
     connect_bd_net [get_bd_pins slice_${nm}/Dout] [get_bd_pins $pin]
   }
 
-  # Channel 2 inputs <- this port's GT reset-done bits
+  # Channel 2 inputs <- this port's GT reset-done bits + RX drop counters
+  # (In2 is driven by the RX adapter further below)
   create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconcat:1.0 gt_rst_done_cat
-  set_property CONFIG.NUM_PORTS {2} [get_bd_cells gt_rst_done_cat]
+  set_property -dict [list CONFIG.NUM_PORTS {3} CONFIG.IN2_WIDTH {30}] [get_bd_cells gt_rst_done_cat]
   connect_bd_net [get_bd_pins gt_tx_done] [get_bd_pins gt_rst_done_cat/In0]
   connect_bd_net [get_bd_pins gt_rx_done] [get_bd_pins gt_rst_done_cat/In1]
   connect_bd_net [get_bd_pins gt_rst_done_cat/dout] [get_bd_pins axi_gpio_gt/gpio2_io_i]
@@ -658,13 +667,24 @@ proc create_sfp_port {label line_rate} {
   #########################################################
   # RX datapath: MRMAC client(64b, axis_clk) -> dwidth(64->256) -> CDC fifo -> MCDMA(256b, sys_clk)
   #########################################################
-  # RX adapter: MRMAC port client -> standard 64b AXIS (into rx_dwidth).
+  # RX adapter: MRMAC port client -> standard AXIS (into rx_dwidth).
   # axis_rx_portN is handshake-only; data is on loose ports rx_axis_tdata<2N> +
-  # rx_axis_tkeep_user<2N>. The adapter passes the single per-frame TLAST
-  # through and forces full tkeep on non-last beats.
+  # rx_axis_tkeep_user<2N>. The MRMAC RX client has NO backpressure, so the
+  # adapter contains a 64 KB store-and-forward frame FIFO (axis_clk domain)
+  # that absorbs downstream stalls (CDC FIFO / MCDMA S2MM / NoC / descriptor
+  # starvation) and, when it overflows, drops frames WHOLE - never truncated
+  # or merged. Frames the MAC flags as errored are dropped too. Its drop
+  # counters are read through GPIO channel 2 of axi_gpio_gt (see above).
   create_bd_cell -type module -reference mrmac_port_rx_axis_adapter rx_axis_adapter
-  set_property CONFIG.DATA_W [expr {8 * $client_bytes}] [get_bd_cells rx_axis_adapter]
+  set_property -dict [list \
+    CONFIG.DATA_W [expr {8 * $client_bytes}] \
+    CONFIG.FIFO_BYTES {65536} \
+    CONFIG.DROP_ERR_FRAMES {1} \
+  ] [get_bd_cells rx_axis_adapter]
   connect_bd_net [get_bd_pins axis_clk] [get_bd_pins rx_axis_adapter/aclk]
+  connect_bd_net [get_bd_pins axis_rstn] [get_bd_pins rx_axis_adapter/aresetn]
+  connect_bd_net [get_bd_pins sys_clk] [get_bd_pins rx_axis_adapter/sys_clk]
+  connect_bd_net [get_bd_pins rx_axis_adapter/rx_drop_status] [get_bd_pins gt_rst_done_cat/In2]
   connect_bd_net [get_bd_pins rx_axis_tdata]      [get_bd_pins rx_axis_adapter/rx_axis_tdata]
   connect_bd_net [get_bd_pins rx_axis_tkeep_user] [get_bd_pins rx_axis_adapter/rx_axis_tkeep_user]
   connect_bd_net [get_bd_pins rx_axis_tlast]  [get_bd_pins rx_axis_adapter/rx_axis_tlast]

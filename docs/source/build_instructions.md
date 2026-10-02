@@ -32,9 +32,9 @@ supported by the design and the FMC connector on which to connect the mezzanine 
 
 These designs drive each SFP28 port as an independent {{ linkspeed }}GbE channel of the MRMAC.
 
-| Target board        | Target design     | Ports   | FMC Slot    | Vivado<br> Edition | IP<br>License |
-|---------------------|-------------------|---------|-------------|-----|-----|
-{% for design in data.designs %}{% if design.linkspeed == linkspeed and design.publish %}| [{{ design.board }}]({{ design.link }}) | `{{ design.label }}` | {{ design.lanes | length }}x | {{ design.connector }} | {{ "Enterprise" if design.license else "Standard 🆓" }} | {{ "Required" if design.ip_license else "-" }} |
+| Target board        | Target design     | Ports   | FMC Slot    | Standalone | PetaLinux | Yocto | Vivado<br> Edition | IP<br>License |
+|---------------------|-------------------|---------|-------------|-----|-----|-----|-----|-----|
+{% for design in data.designs %}{% if design.linkspeed == linkspeed and design.publish %}| [{{ design.board }}]({{ design.link }}) | `{{ design.label }}` | {{ design.lanes | length }}x | {{ design.connector }} | {{ "✅" if design.baremetal else "-" }} | {{ "✅" if design.petalinux else "-" }} | {{ "✅" if design.yocto else "-" }} | {{ "Enterprise" if design.license else "Standard 🆓" }} | {{ "Required" if design.ip_license else "-" }} |
 {% endif %}{% endfor %}
 {% endfor %}
 
@@ -74,7 +74,7 @@ To see the available targets and the state of a build:
 ```
 
 ```{note}
-The embedded Linux images (PetaLinux) can only be built on a
+The embedded Linux images (PetaLinux and Yocto) can only be built on a
 native Linux machine; everything else builds on Windows too. On Windows, the
 runner refuses the Linux-only stages up front and prints the exact command
 to run on the Linux machine. For Versal targets on Windows, the runner also
@@ -168,11 +168,28 @@ connection), you can follow these instructions.
 
 The PetaLinux build will then be configured for offline build.
 
+### Build Yocto
+
+The Yocto (AMD EDF) build requires a native Linux machine with Vivado and
+Vitis 2025.2 and Google's `repo` tool; PetaLinux Tools are not needed. The
+runner builds the Vivado XSA first if it does not already exist:
+
+```
+./build.sh yocto --target <target>
+```
+
+Valid targets for Yocto are:
+{% for design in data.designs if design.yocto and design.publish %} `{{ design.label }}`{{ ", " if not loop.last else "." }} {% endfor %}
+
+The output products are written to `Yocto/<target>/images/linux/`. See
+[Yocto](yocto) for the requirements, the build outputs and how to write the
+SD card.
+
 ### Build everything
 
 This builds everything that the target supports — the Vivado project and XSA,
-the standalone application and the PetaLinux image — and gathers the boot
-images into `bootimages/*.zip`:
+the standalone application, the PetaLinux image and the Yocto image — and
+gathers the boot images into `bootimages/*.zip`:
 
 ```
 ./build.sh all --target <target>
@@ -181,5 +198,20 @@ images into `bootimages/*.zip`:
 
 On Windows, `all` builds everything that the host can build and reports the
 Linux-only stages as `BLOCKED` rather than failing.
+
+`./build.sh package --target <target>` gathers whatever has been built into
+the zips on its own. It rewrites a zip when the build artifacts are newer
+than the zip, so after a rebuild the zips in `bootimages/` always hold the
+latest images. One zip is written per flow:
+
+| Zip in `bootimages/` | Contents |
+|----------------------|----------|
+| `sfp28-fmc-mrmac_<target>_standalone-2025-2.zip` | `BOOT.BIN` of the echo server |
+| `sfp28-fmc-mrmac_<target>_petalinux-2025-2.zip` | `boot/` (`BOOT.BIN`, `image.ub`, `boot.scr`) and `root/rootfs.tar.gz` |
+| `sfp28-fmc-mrmac_<target>_yocto-2025-2.zip` | `rootfs.wic.xz`, `rootfs.wic.bmap`, `BOOT.BIN`, `BOOTAA64.EFI` |
+
+To free disk space while keeping a target testable, `./build.sh clean
+--target <target> --keep-boot` deletes the rebuildable intermediate files but
+keeps the XSA, the boot files and the zips.
 
 [supported Linux distributions]: https://docs.amd.com/r/en-US/ug1144-petalinux-tools-reference-guide/Setting-Up-Your-Environment

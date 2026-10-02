@@ -4,8 +4,8 @@ In this reference design, all four ports of the [Quad SFP28 FMC] are clients of 
 [Integrated 100G Multirate Ethernet MAC (MRMAC)] hard block, configured for four independent
 channels at 10GbE or 25GbE (one channel per SFP28 port, one GTY transceiver lane per channel).
 Packet data is moved to and from system memory (DDR) by a per-port AXI MCDMA, through the Versal
-NoC, and the ports are driven under PetaLinux by the AXI Ethernet (`xilinx_axienet`) driver. A
-bare-metal echo-server test application is also included.
+NoC, and the ports are driven under Linux (PetaLinux or Yocto / AMD EDF) by the AXI Ethernet
+(`xilinx_axienet`) driver. A bare-metal echo-server test application is also included.
 
 This contrasts with the Opsero [Quad SFP28 FMC (XXV)] reference design, which drives the same
 mezzanine card with four instances of the soft 10G/25G Ethernet Subsystem IP. Here a single
@@ -28,9 +28,16 @@ variants are separate build targets).
   are buffered by a pair of free-running BUFG_GTs into full-rate and half-rate user clocks for
   that port.
 * **MRMAC client AXIS adapters.** The MRMAC per-port client is not a standard AXI4-Stream bus —
-  the data rides on loose 64-bit lane pins plus an 11-bit `tkeep_user` control word. Small custom
-  RTL adapters (`mrmac_port_tx_axis_adapter` / `mrmac_port_rx_axis_adapter`) present each port's
+  the data rides on loose 64-bit lane pins plus an 11-bit `tkeep_user` control word. Custom RTL
+  adapters (`mrmac_port_tx_axis_adapter` / `mrmac_port_rx_axis_adapter`) present each port's
   client as a standard AXI4-Stream at the port's active width.
+* **RX frame FIFO.** The MRMAC RX client has no backpressure: every beat it presents must be
+  accepted on that clock cycle. The RX adapter therefore contains a 64 KB store-and-forward
+  frame FIFO per port that absorbs stalls further down the RX path (DMA, NoC, DDR). A frame is
+  passed on only once it has been received completely and without error; when the FIFO is
+  full, or the MAC flags a frame as bad, the frame is dropped **whole** — never truncated or
+  merged with the next one — and counted. The two drop counters are readable by software (see
+  [Registers and counters](registers)).
 * **Datapath to DDR.** Per port, a width converter (to 256 bits) and an asynchronous CDC FIFO
   bridge the 390.625 MHz MRMAC client clock domain to the 100 MHz system clock domain, where an
   AXI MCDMA moves packet data to and from DDR over three NoC AXI ports (scatter-gather, MM2S,
@@ -39,12 +46,19 @@ variants are separate build targets).
   clock (GBTCLK0) at 322.265625 MHz. It is programmed over I2C through the card's PCA9548 mux
   (channel 4; channels 0–3 are the SFP module management buses).
 * **Control and sideband.** Per port, an AXI-Lite control path reaches the MCDMA and a GT-control
-  AXI GPIO (which lets software reset that port's GT lane and read reset-done). Shared
+  AXI GPIO (which lets software reset that port's GT lane, read reset-done and read the RX drop
+  counters). Shared
   peripherals: the MRMAC AXI-Lite interface, one AXI IIC to the PCA9548 mux, a 4-bit MOD_ABS
   input GPIO (SFP module presence) and an APB3 bridge to the GT quad. The SFP `TX_DISABLE` lines
   are tied low (transmitter enabled from configuration), the `RS0`/`RS1` rate-select lines are
   tied low on the 10G targets and high on the 25G targets, and each slot's user LEDs show link
   status (green = module present and link up, red = module present and link down).
+
+The figure below zooms into one SFP28 port as the block design builds it (the `sfp_port<N>`
+hierarchy, repeated for N = 0 to 3): the RX path with the frame FIFO and its drop counters, the
+TX path, the GT-control GPIO and the cells it connects to at the top level.
+
+![One SFP28 port of the block design (Vivado view)](images/versal-mrmac-sfp-port-bd-diagram.png)
 
 ## Supported Hardware Platforms
 
@@ -75,14 +89,19 @@ MRMAC. The VCK190 satisfies both via its FMCP1 connector.
 
 ## Supported Software
 
-This reference design can be driven within a PetaLinux environment, or by the included
+This reference design can be driven within an embedded Linux environment — built either with
+PetaLinux or with Yocto (the AMD Embedded Development Framework, EDF) — or by the included
 bare-metal echo-server test application. The repository includes all necessary scripts and code
-to build both. The table below outlines the corresponding applications available:
+to build all three. The table below outlines the corresponding applications available:
 
 | Environment      | Available Applications  |
 |------------------|-------------------------|
 | Standalone       | Raw-Ethernet echo server (ARP, ICMP ping, UDP echo on all 4 ports) |
-| PetaLinux        | Built-in Linux commands<br>Additional tools: ethtool, iperf3, phytool<br>Bundled self-test: `mrmac-loopback-test` |
+| PetaLinux        | Built-in Linux commands<br>Additional tools: ethtool, iperf3, phytool, devmem<br>Bundled self-test: `mrmac-loopback-test` |
+| Yocto (AMD EDF)  | Built-in Linux commands<br>Additional tools: ethtool, iperf3, nstat, phytool, devmem2<br>Bundled self-test: `mrmac-loopback-test` |
+
+How to build each of them is described in [Build instructions](build_instructions), and how to
+run and test the design under Linux in [Testing the design](testing).
 
 [Quad SFP28 FMC]: https://docs.opsero.com/op081/datasheet/overview/
 [Quad SFP28 FMC (XXV)]: https://sfp28-xxv.ethernetfmc.com

@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Opsero <support@opsero.com>
+Date: Mon, 28 Sep 2026 18:29:32 -0400
+Subject: [PATCH] net: axienet: report the MCDMA S2MM packet drop count in
+ ethtool -S
+
+When the AXI MCDMA S2MM channel has no free RX descriptor it drops the
+whole incoming frame and only counts it in its S2MM packet drop status
+register (S2MM_PKTDROP_STAT, MCDMA base + 0x514). These frames never
+reach the driver, so they appear in no netdev or ethtool counter, and
+MRMAC RX loss from a too small RX ring was only visible as TCP
+retransmits.
+
+Export the register as "rx_dma_pkt_drop" after the per-queue counters.
+It is the 32-bit total of all S2MM channels of the MCDMA, free running
+since the last DMA reset, and has no read side effect (unlike the
+per-channel 16-bit counters at 0x558 + n * 0x40, which clear on read and
+are therefore not used). It is read only while the interface is up and
+reported as 0 otherwise.
+---
+ drivers/net/ethernet/xilinx/xilinx_axienet.h   |  4 ++++
+ .../net/ethernet/xilinx/xilinx_axienet_mcdma.c | 18 ++++++++++++++++--
+ 2 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/xilinx/xilinx_axienet.h b/drivers/net/ethernet/xilinx/xilinx_axienet.h
+index 9fcaeab1c8e0..4b19d5681a07 100644
+--- a/drivers/net/ethernet/xilinx/xilinx_axienet.h
++++ b/drivers/net/ethernet/xilinx/xilinx_axienet.h
+@@ -1244,6 +1244,10 @@ struct axienet_dma_q {
+ #define AXIENET_ETHTOOLS_SSTATS_LEN 6
+ #define AXIENET_TX_SSTATS_LEN(lp) ((lp)->num_tx_queues * 2)
+ #define AXIENET_RX_SSTATS_LEN(lp) ((lp)->num_rx_queues * 2)
++/* MCDMA S2MM packet drop count, after the per-queue RX statistics */
++#define AXIENET_MCDMA_PKTDROP_STAT_IDX(lp) (AXIENET_ETHTOOLS_SSTATS_LEN + \
++					    AXIENET_TX_SSTATS_LEN(lp) + \
++					    AXIENET_RX_SSTATS_LEN(lp))
+ 
+ /**
+  * enum axienet_ip_type - AXIENET IP/MAC type.
+diff --git a/drivers/net/ethernet/xilinx/xilinx_axienet_mcdma.c b/drivers/net/ethernet/xilinx/xilinx_axienet_mcdma.c
+index d2793e0a5f4e..a3cc6475d437 100644
+--- a/drivers/net/ethernet/xilinx/xilinx_axienet_mcdma.c
++++ b/drivers/net/ethernet/xilinx/xilinx_axienet_mcdma.c
+@@ -99,6 +99,8 @@ static struct axienet_stat axienet_get_rx_strings_stats[] = {
+ 	{ "rxq15_bytes"   },
+ };
+ 
++static const char axienet_pktdrop_string[ETH_GSTRING_LEN] = "rx_dma_pkt_drop";
++
+ /**
+  * axienet_mcdma_tx_bd_free - Release MCDMA Tx buffer descriptor rings
+  * @ndev:	Pointer to the net_device structure
+@@ -569,6 +571,9 @@ void axienet_strings(struct net_device *ndev, u32 sset, u8 *data)
+ 		if (i % 2 == 0)
+ 			++j;
+ 	}
++	if (sset == ETH_SS_STATS)
++		memcpy(data + AXIENET_MCDMA_PKTDROP_STAT_IDX(lp) * ETH_GSTRING_LEN,
++		       axienet_pktdrop_string, ETH_GSTRING_LEN);
+ }
+ 
+ int axienet_sset_count(struct net_device *ndev, int sset)
+@@ -577,8 +582,7 @@ int axienet_sset_count(struct net_device *ndev, int sset)
+ 
+ 	switch (sset) {
+ 	case ETH_SS_STATS:
+-		return (AXIENET_TX_SSTATS_LEN(lp) + AXIENET_RX_SSTATS_LEN(lp) +
+-			AXIENET_ETHTOOLS_SSTATS_LEN);
++		return AXIENET_MCDMA_PKTDROP_STAT_IDX(lp) + 1;
+ 	default:
+ 		return -EOPNOTSUPP;
+ 	}
+@@ -611,6 +615,16 @@ void axienet_get_stats(struct net_device *ndev,
+ 		data[i++] = q->rxq_bytes;
+ 		++j;
+ 	}
++
++	/* S2MM packet drop count of the whole MCDMA (PG288 S2MM_PKTDROP_STAT,
++	 * 32 bit, no read side effect, cleared only by a DMA reset).
++	 * Frames dropped here found no free RX descriptor and never reached
++	 * the driver. Read only while up: the DMA is not set up otherwise.
++	 */
++	data[AXIENET_MCDMA_PKTDROP_STAT_IDX(lp)] =
++		(netif_running(ndev) && lp->num_rx_queues) ?
++		axienet_dma_in32(lp->dq[0], XMCDMA_RX_OFFSET +
++				 XMCDMA_PKTDROP_OFFSET) : 0;
+ }
+ 
+ /**
+-- 
+2.43.0
+

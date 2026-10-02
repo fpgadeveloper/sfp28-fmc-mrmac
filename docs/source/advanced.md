@@ -2,11 +2,11 @@
 
 This section is intended for users who want to modify the reference
 design — adding IP to the block design, changing constraints, adding
-packages or drivers to the PetaLinux project, and so on. It describes
+packages or drivers to the PetaLinux or Yocto project, and so on. It describes
 how the repository is laid out, how the build flow works,
-how the block design assembles the MRMAC subsystem, how the PetaLinux
-BSP is composed from layered fragments, and what modifications have been
-added on top of the stock AMD BSP.
+how the block design assembles the MRMAC subsystem, how the PetaLinux and
+Yocto BSPs are composed from layered fragments, and what modifications have
+been added on top of the stock AMD BSP.
 
 The actual *build* instructions are in [build_instructions](build_instructions);
 this section is about understanding the project well enough to modify
@@ -33,6 +33,13 @@ it.
 │   ├── build-vitis.bat        <- Windows workspace-creation helper
 │   ├── py/                    <- Vitis Python build driver (args.json config)
 │   └── common/src/            <- Echo server sources (main.c, mrmac.c, si5328.c, vadj.c)
+├── Yocto/
+│   ├── scripts/               <- Yocto / EDF flow engine (workspace, configure, build, package)
+│   └── bsp/
+│       ├── vck190/                 <-   board layer (kernel cfg + patches, U-Boot, DT, image)
+│       └── port-configs/
+│           ├── ports-versal-0123/      <- port-config overlay layer: 10G targets
+│           └── ports-versal-0123-25g/  <- port-config overlay layer: 25G targets
 └── Vivado/
     ├── build-vivado.bat       <- Windows project-creation helper
     ├── scripts/
@@ -46,10 +53,11 @@ it.
         └── hdl/
             ├── mrmac_gt_ctrl_passthru.v  <- GT-control feed-through (SDT generator workaround)
             └── mrmac_port_axis_adapter.v <- MRMAC port client ↔ AXI4-Stream adapters
+                                             (RX: with the store-and-forward frame FIFO)
 ```
 
 Per-target build outputs are written to `Vivado/<target>/`,
-`Vitis/<target>_workspace/` and `PetaLinux/<target>/`; packaged
+`Vitis/<target>_workspace/`, `PetaLinux/<target>/` and `Yocto/<target>/`; packaged
 boot-image zips are written to `bootimages/`. None of these are
 committed.
 
@@ -71,6 +79,7 @@ For this repo the targets are `vck190_fmcp1` (4x 10GbE) and
 
 The complete list of valid targets comes from `config/data.json`; run
 `./build.sh list` (or `./build.sh labels` for one per line) to print it.
+The Yocto flow selects its board layer the same way (`Yocto/bsp/<board>/`).
 
 ## `config/data.json` and `config/update.py`
 
@@ -90,7 +99,7 @@ tables.
 
 ```{note}
 The `lanes` field of each design holds the list of SFP28 ports the
-design instantiates (`["0","1","2","3"]` for all four). Each port is one
+design instantiates (`[0, 1, 2, 3]` for all four). Each port is one
 MAC client of the single MRMAC hard block and uses one GTY lane (FMC
 DP0–3). The `linkspeed` field (`"10"` or `"25"`) selects the MRMAC
 configuration preset and the active client data width.
@@ -99,11 +108,11 @@ configuration preset and the active client data width.
 When adding or modifying a target, edit `data.json` and re-run
 `update.py` (from the `config/` directory). Do not hand-edit content
 between the updater markers; it will be overwritten on the next
-regeneration. Note that `update.py` derives the PetaLinux port-config
-overlay name from the populated ports and the line rate:
-`lanes=["0","1","2","3"]` with `linkspeed="10"` selects
-`bsp/ports-versal-0123/`; `linkspeed="25"` selects
-`bsp/ports-versal-0123-25g/`.
+regeneration. The port-config overlay that a target uses is named
+explicitly by the design's `portcfg` field (`ports-versal-0123` for the
+10G target, `ports-versal-0123-25g` for the 25G target); the same name
+selects `PetaLinux/bsp/<portcfg>/` and `Yocto/bsp/port-configs/<portcfg>/`.
+The `yocto` field enables the Yocto flow for a target.
 
 ## Build runner
 
@@ -123,6 +132,7 @@ The build is organised into stages, each available as a sub-command:
 | `xsa`        | Synthesise, implement, generate the device image and export the hardware (`.xsa`).    |
 | `standalone` | Create the Vitis workspace, build the echo server app, package `BOOT.BIN`.            |
 | `petalinux`  | Create the PetaLinux project from the XSA, apply the BSP overlays, build and package. |
+| `yocto`      | Generate a Yocto machine from the XSA, apply the BSP layers, build the SD-card image. |
 | `package`    | Gather the built boot artifacts into `bootimages/*.zip`.                              |
 | `all`        | Build every stage the target supports, then `package`.                                |
 
@@ -130,7 +140,7 @@ Run `./build.sh list` to see the targets and their attributes, `./build.sh
 status --target <t>` for per-stage artifact state, and `./build.sh --help`
 for the full command list.
 
-Both targets in this repository support the standalone and PetaLinux flows.
+Both targets in this repository support the standalone, PetaLinux and Yocto flows.
 Because each stage builds its prerequisites first, a single `./build.sh all
 --target <t>` cascades the whole pipeline:
 
@@ -146,6 +156,10 @@ Because each stage builds its prerequisites first, a single `./build.sh all
                    -> petalinux-config --silentconfig
                    -> petalinux-build
                    -> petalinux-package boot --plm --psmfw --u-boot --dtb
+  -> yocto       : repo init/sync of the AMD EDF manifest (first build only)
+                   -> sdtgen (XSA -> System Device Tree) -> gen-machineconf parse-sdt
+                   -> add bsp/<board>/meta-user + bsp/port-configs/<portcfg>/meta-user layers
+                   -> bitbake edf-linux-disk-image
   -> package     : zip the resulting boot files into bootimages/
 ```
 
@@ -188,14 +202,17 @@ parameterised by the `ports` list and the `line_rate` (passed in from
    to the per-lane user-clock buffers (see below).
 5. **Per-port subsystem.** The `create_sfp_port` proc (called once per
    port) builds an `sfp_port<N>` hierarchy containing the MRMAC client
-   AXIS adapters, the width-converter/CDC-FIFO datapath, the AXI MCDMA,
-   an AXI-Lite SmartConnect, the GT-control GPIO, and the SFP sideband
-   and LED logic.
+   AXIS adapters (the RX one with its frame FIFO), the
+   width-converter/CDC-FIFO datapath, the AXI MCDMA, an AXI-Lite
+   SmartConnect, the GT-control GPIO, and the SFP sideband and LED logic
+   (see the figure below).
 6. **Shared peripherals.** One AXI IIC reaches every I2C device on the
    card through the PCA9548 mux, and a 4-bit input GPIO reads the four
    MOD_ABS (module presence) lines. Structural counts (NoC slave ports,
    control SmartConnect masters, interrupts) are derived from the number
    of ports.
+
+![One SFP28 port of the block design (Vivado view)](images/versal-mrmac-sfp-port-bd-diagram.png)
 
 After sourcing the BD script, `build.tcl` runs `validate_bd_design`,
 which triggers parameter propagation and connection automation. To see
@@ -312,7 +329,46 @@ one port's client lane onto a single standard AXIS stream at the port's
 **active width**: a 10GE port only drives/samples `tdata[31:0]`
 ("Independent 32b Non-Segmented"), a 25GE port uses the full 64 bits.
 The adapters and the dwidth converters are sized to the active width by
-the `DATA_W` parameter, set from the target's line rate.
+the `DATA_W` parameter, set from the target's line rate. The TX adapter
+is combinational glue (the MRMAC TX client has backpressure,
+`tx_axis_tready`); the RX adapter contains the frame FIFO described next.
+
+#### RX frame FIFO and drop counters
+
+The MRMAC RX client has **no backpressure**: there is no RX `tready`, so
+every beat the MRMAC presents must be accepted on that cycle. Everything
+behind it can stall — the width converter, the CDC FIFO, the MCDMA S2MM
+channel waiting for a free descriptor, the NoC and DDR. An earlier version
+of the design fed the MRMAC beats straight into the width converter and
+ignored its `tready`; whenever the CDC FIFO filled up, individual beats
+(including end-of-frame beats) were lost, so truncated and merged frames
+reached the DMA while every MAC counter stayed clean. Under sustained
+receive traffic this showed up as very poor TCP throughput towards the
+board (thousands of retransmits) with no error counter explaining it.
+
+`mrmac_port_rx_axis_adapter` therefore contains a **store-and-forward
+frame FIFO** in the MRMAC client clock domain (390.625 MHz):
+
+* `FIFO_BYTES` = 65536 (64 KB per port, block RAM): 43 frames of 1518
+  bytes, or 6 jumbo frames of 9600 bytes.
+* A frame is released downstream only after its last beat has been
+  written and it was not flagged bad ("commit").
+* If the FIFO fills up while a frame is being written, the partial frame
+  is rolled back and the rest of the frame is discarded: frames are
+  dropped **whole**, never truncated or merged. A frame larger than the
+  FIFO is dropped the same way.
+* With `DROP_ERR_FRAMES` = 1, a frame that the MAC flags as bad
+  (`tkeep_user[8]` on its last beat: FCS error, undersize, ...) is rolled
+  back too.
+* After reset, input is ignored up to and including the first end of
+  frame, so the FIFO never starts in the middle of a frame.
+* The output is fully AXI4-Stream compliant (honours `m_axis_tready`).
+
+The adapter counts the frames it drops — a 24-bit overflow counter and a
+6-bit MAC-error counter, both free-running and wrapping — and brings them
+into the 100 MHz domain with `xpm_cdc_gray` as `rx_drop_status[29:0]`.
+They are read through channel 2 of the port's GT-control GPIO (see
+below and [Registers and counters](registers)).
 
 #### Width conversion, CDC and MCDMA
 
@@ -328,13 +384,21 @@ AXI slave ports (scatter-gather, MM2S, S2MM). 256 bits at 100 MHz =
 #### GT-control GPIO
 
 Each port has a dual-channel AXI GPIO (`sfp_port<N>/axi_gpio_gt`) that
-lets software reset that port's GT lane and read reset-done:
+lets software reset that port's GT lane, read reset-done and read the RX
+drop counters:
 
-* **Channel 1 (5 outputs):** bit 0 = `gt_reset_all`, bit 1 =
-  `gt_reset_tx_datapath`, bit 2 = `gt_reset_rx_datapath`, bits 3–4 =
-  spare (`gt-ctrl-rate`).
-* **Channel 2 (2 inputs):** bit 0 = `gt_tx_reset_done`, bit 1 =
-  `gt_rx_reset_done`.
+* **Channel 1 (`GPIO_DATA`, offset `0x0`, 5 outputs):** bit 0 =
+  `gt_reset_all`, bit 1 = `gt_reset_tx_datapath`, bit 2 =
+  `gt_reset_rx_datapath`, bits 3–4 = spare (`gt-ctrl-rate`).
+* **Channel 2 (`GPIO2_DATA`, offset `0x8`, 32 inputs):** bit 0 =
+  `gt_tx_reset_done`, bit 1 = `gt_rx_reset_done`, bits `[7:2]` = RX
+  frames dropped because the MAC flagged them bad (6-bit, wraps), bits
+  `[31:8]` = RX frames dropped because the RX frame FIFO was full (24-bit,
+  wraps).
+
+The Linux GPIO line numbers of the two reset-done bits are unchanged by
+the counters (channel 2 lines follow the 5 channel-1 lines), so the
+`gt-*-gpios` bindings in `port-config.dtsi` still point at lines 5 and 6.
 
 Each port's reset request bits drive only that port's bit of the
 MRMAC's 4-bit `gt_reset_*_in` buses — its own GT lane — unlike the 100G
@@ -374,7 +438,7 @@ assigned in the released projects):
 
 | Peripheral                | Port 0       | Port 1       | Port 2       | Port 3       |
 |---------------------------|--------------|--------------|--------------|--------------|
-| GT-control GPIO           | `0x80040000` | `0x80060000` | `0x80080000` | `0x800A0000` |
+| GT-control GPIO (+ RX drop counters at +0x8) | `0x80040000` | `0x80060000` | `0x80080000` | `0x800A0000` |
 | AXI MCDMA                 | `0x80050000` | `0x80070000` | `0x80090000` | `0x800B0000` |
 
 | Shared peripheral         | Address      |
@@ -437,7 +501,16 @@ I2C (Si5328) and VADJ directly through the standalone driver layer. See
 [echo_server](echo_server) for what the application does and how to run
 it.
 
-## PetaLinux side
+## Linux side (PetaLinux and Yocto)
+
+The PetaLinux BSP (`PetaLinux/bsp/`) and the Yocto BSP (`Yocto/bsp/`)
+carry the same design-specific content — the same `port-config.dtsi`
+overlays, kernel configuration and kernel patches, and the
+`mrmac-loopback-test` recipe — in the layout each tool expects. The
+subsections below describe the PetaLinux layout; the Yocto layout and
+the parts only the Yocto BSP needs (U-Boot VADJ, board PHYs, kernel
+command line and hostname) are described in
+[Yocto](yocto.md#what-the-yocto-bsp-adds).
 
 ### BSP composition
 
@@ -542,35 +615,78 @@ one?"*
   axienet/MRMAC driver has no phylink, so the cages are standalone
   management devices — they are *not* linked to the MACs.
 
-* **MRMAC link carrier-monitor kernel patch.** The MRMAC has no
-  PHY/phylink and gives no link-change interrupt, and the stock
-  `xilinx_axienet` driver checks RX block lock only once in
-  `axienet_open()` (a 1 ms poll), failing the open with `-ENODEV` if the
-  link is not already up. On a cold bring-up the GT/PCS take longer than
-  that to lock, so the open loses the race and the port needs a manual
-  `ip link` bounce; a link partner that powers on later never brings the
-  port up; and the driver never sets the netdev carrier (`ip link` shows
-  `state UNKNOWN`). The patch
+* **MRMAC link monitor kernel patch.** The MRMAC has no PHY/phylink and
+  gives no link-change interrupt, and the stock `xilinx_axienet` driver
+  checks RX block lock only once in `axienet_open()` (a 1 ms poll),
+  failing the open with `-ENODEV` if the link is not already up. On a
+  cold bring-up the GT/PCS take longer than that to lock, so the open
+  loses the race and the port needs a manual `ip link` bounce; a link
+  partner that powers on later never brings the port up; and the driver
+  never sets the netdev carrier. The patch
   `recipes-kernel/linux/linux-xlnx/0002-net-axienet-mrmac-carrier-link-monitor.patch`
   adds a delayed-work monitor that drives the netdev carrier from RX
-  block-lock + status. `open()` now brings the interface up with carrier
-  *off* and starts the monitor instead of failing. While the link is down
-  the monitor re-issues the MRMAC core/serdes reset (`axienet_mrmac_reset`)
-  each cycle to re-attempt lock — the Versal GTY RX does not re-acquire
-  block lock on a partner signal that stabilises *after* its last reset,
-  and the GT reset is one-shot, so the MRMAC reset is the part that
-  re-aligns the lane — and once up it polls for loss. The net effect is
-  that a port comes up automatically at boot and recovers on cable re-seat
-  or partner power-on, with link state reflected in the netdev carrier
-  (`MRMAC link up at 10000` / `MRMAC link down`). It is registered via
-  `SRC_URI:append` in `recipes-kernel/linux/linux-xlnx_%.bbappend`.
+  block lock, RX status and (at 10G/25G) a recent valid control code.
+  `open()` brings the interface up with carrier *off* and starts the
+  monitor instead of failing.
+  * Each sample clears the latched status registers (`0x744`, `0x754`,
+    `0x7B8`), waits 1–2 ms and then reads them, so a sample reflects the
+    live state and not a drop latched earlier (for example by the
+    monitor's own reset).
+  * While up it samples once per second; carrier goes off only after
+    three consecutive bad samples 200 ms apart.
+  * While down it runs the same reset sequence as `open()` every 500 ms:
+    MRMAC reset, GT rate + TX/RX datapath reset (through the GT-control
+    GPIO), MRMAC reset. An MRMAC core/serdes reset alone does not make
+    the Versal GTY RX re-acquire block lock.
+  * It logs `MRMAC link up at <rate> (<n> recovery resets)`,
+    `MRMAC link down (rx_sts … blk_lck … vld_ctrl …)` and, while down,
+    `MRMAC link still down after <n> recovery resets (…)` after 1, 2, 4,
+    8, … resets.
+
+  An earlier version of this patch issued only the MRMAC reset while the
+  link was down, and read the latched status straight after clearing
+  it. Under heavy receive load a port could then be declared down and
+  never come back without an `ip link` bounce. The reworked monitor
+  recovers on its own. See
+  [Testing the design](testing.md#link-bring-up-and-the-link-monitor)
+  for the messages.
+
+* **RX descriptor ring of 1024 on MRMAC ports.** Because the MRMAC RX has
+  no backpressure, the MCDMA S2MM channel drops a whole frame whenever the
+  RX descriptor ring has no free descriptor. With the driver's default
+  ring of 128 descriptors, any scheduling gap longer than about 128 frame
+  times (roughly 150 µs of 1500-byte frames at 10G, 60 µs at 25G) loses
+  frames, which shows up only as TCP retransmits. The patch
+  `0003-net-axienet-default-to-1024-RX-descriptors-on-MRMAC-.patch`
+  makes 1024 RX descriptors the default for MRMAC ports (TX ring and
+  other MAC types unchanged; `ethtool -G` still overrides it while the
+  interface is down). The cost is about 2 MiB of RX buffers per port
+  while the interface is up.
+
+* **`rx_dma_pkt_drop` in `ethtool -S`.** Frames dropped by the MCDMA for
+  lack of a descriptor never reach the driver and appear in no netdev
+  counter. The patch
+  `0004-net-axienet-report-the-MCDMA-S2MM-packet-drop-count-.patch`
+  reports the MCDMA's S2MM packet-drop register (`0x514`) as
+  `rx_dma_pkt_drop` (see [Registers and counters](registers)).
+
+  All three patches are registered via `SRC_URI:append` in
+  `recipes-kernel/linux/linux-xlnx_%.bbappend`, identically in the
+  PetaLinux and Yocto BSPs.
 
 * **Loopback self-test app.** The `mrmac-loopback-test` recipe
   (`recipes-apps/mrmac-loopback-test/`) installs the self-test script
   described in [petalinux](petalinux); it is force-installed via
   `IMAGE_INSTALL:append` in `meta-user/conf/petalinuxbsp.conf`.
 
-* **Root filesystem additions.** `ethtool`, `iperf3` and `phytool`.
+* **Root filesystem additions.** `ethtool`, `iperf3` and `phytool` (the
+  Yocto image adds `nstat`, see [Yocto](yocto.md#using-the-sfp28-ports)).
+
+* **FMC VADJ in U-Boot.** The board BSP's U-Boot boot command runs
+  `vadj_1v5_en` (defined in `recipes-bsp/u-boot/files/platform-top.h`)
+  before booting, which programs the VCK190's VADJ regulator to 1.5 V over
+  I2C so that the FMC is powered when Linux probes it. The Yocto BSP does
+  the same with a U-Boot configuration fragment.
 
 ### Adding a kernel config option, patch, package or device-tree node
 
@@ -609,6 +725,8 @@ SDT, then rebuild (this reuses the sstate cache, so it is incremental).
 | `Vitis/boot/<target>/`              | Standalone `BOOT.BIN` (echo server).                      |
 | `PetaLinux/<target>/`               | PetaLinux project. All Yocto build state lives here.      |
 | `PetaLinux/<target>/images/linux/`  | `BOOT.BIN`, `image.ub`, `boot.scr`, `rootfs.tar.gz`, etc. |
-| `bootimages/`                       | Per-target zipped boot files (`<prj>_<target>_petalinux-<ver>.zip` and `<prj>_<target>_standalone-<ver>.zip`). |
+| `Yocto/<target>/`                   | Yocto workspace (layers, build directory).                |
+| `Yocto/<target>/images/linux/`      | `BOOT.BIN`, `Image`, `system.dtb`, `rootfs.wic.xz`, `rootfs.wic.bmap`, `rootfs.tar.gz`. |
+| `bootimages/`                       | Per-target zipped boot files (`<prj>_<target>_standalone-<ver>.zip`, `<prj>_<target>_petalinux-<ver>.zip` and `<prj>_<target>_yocto-<ver>.zip`). |
 
 None of these directories are committed to the repository.

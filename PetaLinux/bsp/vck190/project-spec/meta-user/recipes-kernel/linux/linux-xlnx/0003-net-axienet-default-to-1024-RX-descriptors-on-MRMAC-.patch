@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Opsero <support@opsero.com>
+Date: Mon, 28 Sep 2026 18:28:06 -0400
+Subject: [PATCH] net: axienet: default to 1024 RX descriptors on MRMAC ports
+
+The MRMAC has no RX backpressure (its RX AXI-Stream has no tready), so
+the AXI MCDMA S2MM channel behind it silently discards a whole frame
+whenever the RX descriptor ring has no free descriptor. The driver's
+default ring of 128 descriptors is refilled from NAPI; any scheduling
+gap longer than ~128 frame times (~150 us of 1500-byte frames at 10G,
+~60 us at 25G) therefore loses frames. The loss is invisible in the MAC
+and netdev error counters and only shows up as TCP retransmits and as
+the MCDMA S2MM packet-drop count (MCDMA base + 0x514).
+
+Measured on VCK190 + Quad SFP28 FMC (TCP host->board, 30 s):
+  10G: 50415 retransmits with 128 RX BDs, 226 with 1024
+  25G: 73348 retransmits with 128 RX BDs, 3599 with 1024
+
+Default MRMAC ports to 1024 RX descriptors. The TX ring and all other
+MAC types keep their defaults; "ethtool -G" still overrides the value
+while the interface is down.
+
+Memory cost per port with a 1500-byte MTU: 1024 x ~2 KiB RX skbs plus
+1024 x 128 B coherent descriptors, i.e. ~2.1 MiB instead of ~0.26 MiB,
+allocated only while the interface is up.
+---
+ drivers/net/ethernet/xilinx/xilinx_axienet_main.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/drivers/net/ethernet/xilinx/xilinx_axienet_main.c b/drivers/net/ethernet/xilinx/xilinx_axienet_main.c
+index 6dfa4a4fbfdd..c0c4b8604f25 100644
+--- a/drivers/net/ethernet/xilinx/xilinx_axienet_main.c
++++ b/drivers/net/ethernet/xilinx/xilinx_axienet_main.c
+@@ -58,6 +58,10 @@
+ 
+ /* Descriptors defines for Tx and Rx DMA */
+ #define RX_BD_NUM_DEFAULT		128
++/* MRMAC RX has no backpressure: the MCDMA S2MM drops whole frames whenever
++ * the RX ring has no free descriptor, so give MRMAC ports a deeper ring.
++ */
++#define RX_BD_NUM_MRMAC_DEFAULT		1024
+ #define TX_BD_NUM_MIN			(MAX_SKB_FRAGS + 1)
+ #define TX_BD_NUM_MAX			4096
+ #define RX_BD_NUM_MAX			4096
+@@ -5267,6 +5271,11 @@ static int axienet_probe(struct platform_device *pdev)
+ 		}
+ 	}
+ 
++	/* Still adjustable with "ethtool -G" while the interface is down */
++	if (lp->axienet_config &&
++	    lp->axienet_config->mactype == XAXIENET_MRMAC)
++		lp->rx_bd_num = RX_BD_NUM_MRMAC_DEFAULT;
++
+ 	/* Setup checksum offload, but default to off if not specified */
+ 	lp->features = 0;
+ #ifndef CONFIG_AXIENET_HAS_MCDMA
+-- 
+2.43.0
+

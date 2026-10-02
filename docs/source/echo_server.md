@@ -29,8 +29,10 @@ monitor (see [advanced](advanced)).
 
 ## Building the Vitis workspace
 
-To build the Vitis workspace and the echo server application, follow the
-[build instructions](/build_instructions.md#build-vitis-workspace) — the
+You need Vivado and Vitis 2025.2 and the (free) MRMAC license — see the
+[build instructions](build_instructions.md#license-requirements). To build the Vitis workspace
+and the echo server application, follow the
+[build instructions](build_instructions.md#build-vitis-workspace) — the
 steps are the same on Windows and Linux.
 
 In short, from the repository root:
@@ -57,8 +59,16 @@ You must have followed the build instructions before you can run the application
 5. Now right click on the application "echo_server" then navigate the
    drop down menu to **Run As->Launch on Hardware (Single Application Debug (GDB)).**
 
-Alternatively, copy the `BOOT.BIN` from `Vitis/boot/<target>/` (or from the standalone zip in
-`bootimages/`) to an SD card and boot the board from SD.
+For JTAG boot, the VCK190 boot-mode switch SW1 must be set to JTAG: 1111 (1=ON,2=ON,3=ON,4=ON).
+
+Alternatively, boot the application from an SD card:
+
+1. Copy the `BOOT.BIN` from `Vitis/boot/<target>/` (or from the standalone zip
+   `bootimages/sfp28-fmc-mrmac_<target>_standalone-2025-2.zip`) to the first (FAT32) partition
+   of an SD card.
+2. Set the VCK190 to boot from SD card: DIP switch SW1 set to 1000 (1=ON,2=OFF,3=OFF,4=OFF).
+3. Connect the [Quad SFP28 FMC] to FMCP1, open a UART terminal at 115200 baud on the board's
+   USB-UART (see [UART terminal](petalinux.md#uart-terminal)) and power up the board.
 
 The run configuration will first program the device, then load and run the application. The UART
 output (115200 baud) of a `vck190_fmcp1` run appears as follows:
@@ -86,7 +96,9 @@ is printed if a link is subsequently lost (e.g. cable unplugged).
 
 Connect an SFP28 port to a PC's 10G/25G NIC (matching the target's line rate) and configure the
 PC's interface with a fixed IP address on the matching subnet — for port 0, for example,
-`192.168.10.20/24`. The IP addresses are fixed (there is no DHCP client in the application).
+`192.168.10.20/24`. The IP addresses are fixed (there is no DHCP client in the application). As
+under Linux, the PC's NIC must run at the target's fixed rate with auto-negotiation and FEC off —
+see [Configure the link partner](testing.md#configure-the-link-partner).
 
 ### Ping a port
 
@@ -112,3 +124,5 @@ hello
 The echo server answers ARP, ICMP ping and UDP only. There is no TCP stack, so a telnet
 connection (as used with the lwIP echo servers of our other reference designs) will not work.
 ```
+
+[Quad SFP28 FMC]: https://docs.opsero.com/op081/datasheet/overview/
